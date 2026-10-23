@@ -18,7 +18,8 @@ export default defineConfig({
     hasTouch: true,
     isMobile: true,
     channel: channel === 'chromium' ? undefined : channel,
-    launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] },
+    // WebRtcHideLocalIpsWithMdns: 同じ PC の 2 ページ間で WebRTC をつなぐため（2 人プレイのテスト）
+    launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-features=WebRtcHideLocalIpsWithMdns'] },
     trace: 'off',
     actionTimeout: 30_000,
     navigationTimeout: 30_000,

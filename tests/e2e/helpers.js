@@ -49,7 +49,7 @@ export async function layoutIssues(page, { safe = { l: 0, r: 0, t: 0, b: 0 } } =
     };
     const els = [...document.querySelectorAll('button, input[type=range], #stick, #throttle')].filter(visible);
     const name = (el) => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.dataset.vehicle ? `[${el.dataset.vehicle}]` : ''}${el.dataset.location ? `[${el.dataset.location}]` : ''}${el.dataset.button ? `[${el.dataset.button}]` : ''} "${(el.textContent || '').trim().slice(0, 14)}"`;
-    const inScroller = (el) => !!el.closest('.cards, .settings');
+    const inScroller = (el) => !!el.closest('.cards, .settings, .guide-list, .guide-content');
     const rects = els.map((el) => ({ el, r: el.getBoundingClientRect() }));
     for (const { el, r } of rects) {
       if (r.width < 47.5 || r.height < 47.5) issues.push(`小さすぎる (${Math.round(r.width)}x${Math.round(r.height)}): ${name(el)}`);
@@ -69,7 +69,7 @@ export async function layoutIssues(page, { safe = { l: 0, r: 0, t: 0, b: 0 } } =
       }
     }
     // スクロール領域自体は画面内に
-    for (const sc of document.querySelectorAll('.cards, .settings')) {
+    for (const sc of document.querySelectorAll('.cards, .settings, .guide-list, .guide-content')) {
       if (!visible(sc)) continue;
       const r = sc.getBoundingClientRect();
       if (r.left < safe.l - 0.5 || r.right > W - safe.r + 0.5 || r.bottom > H - safe.b + 0.5 || r.top < safe.t - 0.5) issues.push(`スクロール領域が画面外: .${sc.className}`);

@@ -46,9 +46,10 @@ export class Hud {
     this.half = (b.r - b.l) / 2;
     this.sp = clamp(this.half - 56, 95, 165);
     this.rects = [];
-    const fn = { basic: this.drawBasic, pfd: this.drawPfd, fighter: this.drawFighter, heli: this.drawHeli, glide: this.drawGlide }[this.type] || this.drawBasic;
+    const fn = { basic: this.drawBasic, pfd: this.drawPfd, fighter: this.drawFighter, heli: this.drawHeli, glide: this.drawGlide, balloon: this.drawBalloon, car: this.drawCar }[this.type] || this.drawBasic;
     fn.call(this, st, extra);
     this.drawCommon(st, extra);
+    if (this.showMinimap !== false) this.drawMinimap(st, extra);
   }
 
   setBounds(l, r) {
@@ -174,7 +175,7 @@ export class Hud {
   // ---------- 共通: 警告・モード表示 ----------
   drawCommon(st, extra) {
     const W = this.W, H = this.H;
-    let wy = 92;
+    let wy = st.combat ? 128 : 92;
     const def = this.def;
     if (st.status === 'flying') {
       if (st.stallWarn && def.model === 'fixedwing' && !st.onGround) { this.warning(def.id === 'airliner' ? 'STALL' : '失速！', wy); wy += 42; }
@@ -183,15 +184,21 @@ export class Hud {
       if (st.fuel != null && st.fuel < 0.15) { this.warning(st.fuel <= 0 ? '燃料切れ' : '燃料わずか', wy, '#ffc23a'); wy += 42; }
       if (st.outOfBounds) { this.warning('エリア外 — 引き返してください', wy, '#ffc23a'); wy += 42; }
       if (def.model === 'human' && st.phase === 'freefall' && st.agl < 900) { this.warning('パラシュートを開いて！', wy, '#ffc23a'); wy += 42; }
+      if (extra.threats && extra.threats.length) { this.warning(`敵機に狙われています（${extra.threats.length}）`, wy, '#ff6a3a'); wy += 42; }
+      if (extra.net && extra.net.weak) { this.warning('通信が不安定です', wy, '#ffc23a'); wy += 42; }
     }
+    if (extra.hitDirs && extra.hitDirs.length) this.drawHitDirs(extra);
     // リングコース
     if (st.rings) {
       const r = st.rings;
       const txt = `リング ${Math.min(r.index + 1, r.total)}/${r.total}   ${fmtTime(r.time)}${r.penalty ? `  (+${r.penalty}s)` : ''}`;
-      this.statusLine([txt], 66);
-      // 次のリングの方向
-      if (r.next && extra.camera) this.pointer(r.next, extra, '#3affb0');
+      this.statusLine([txt], 74);
+      if (r.next && extra.camera) this.ringGate(st, r, extra);
     }
+    // 射撃モード
+    if (st.combat && extra.camera) this.drawCombat(st, extra);
+    // 2 人プレイの相手
+    if (extra.remotes) for (const rm of extra.remotes) if (rm.pos) this.pointer(rm.pos, extra, '#6fd8ff', ` ${fmtDist(rm.dist)}`);
     if (st.mode === 'landing' && st.status === 'flying' && extra.camera) {
       this.pointer({ x: st.target.x, y: st.target.elevation, z: st.target.z }, extra, '#ffb040', `${(st.target.dist / 1000).toFixed(2)} km`);
     }
@@ -213,11 +220,12 @@ export class Hud {
       if (label) this.text(label, v.x, v.y - 26, { size: 12, color });
       return;
     }
-    const cx = W / 2, cy = H / 2;
-    let dx = v.x - cx, dy = v.y - cy;
+    // 画面の端ではなく、操作 UI の内側（HUD の範囲）の縁に出す
+    const cx = this.cx ?? W / 2, cy = H / 2;
+    let dx = v.x - W / 2, dy = v.y - cy;
     if (v.behind) { dx = -dx; dy = -dy; }
     const a = Math.atan2(dy, dx);
-    const rx = W / 2 - margin, ry = H / 2 - margin;
+    const rx = Math.max(60, (this.half ?? W / 2) - 34), ry = H / 2 - margin;
     const k = Math.min(Math.abs(rx / Math.cos(a)), Math.abs(ry / Math.sin(a)));
     const x = cx + Math.cos(a) * k, y = cy + Math.sin(a) * k;
     c.save();
@@ -229,6 +237,23 @@ export class Hud {
     c.fill();
     c.restore();
     if (label) this.text(label, x - Math.cos(a) * 30, y - Math.sin(a) * 22, { size: 12, color });
+  }
+
+  /** 被弾した方向を画面中央の周りの赤い弧で示す（だんだん消える） */
+  drawHitDirs(extra) {
+    const c = this.ctx;
+    const cx = this.W / 2, cy = this.H / 2;
+    const R = Math.min(this.H / 2 - 50, (this.half ?? this.W / 2) - 20, 150);
+    for (const hd of extra.hitDirs) {
+      const v = extra.project(hd.from);
+      let dx = v.x - cx, dy = v.y - cy;
+      if (v.behind) { dx = -dx; dy = -dy; }
+      if (Math.hypot(dx, dy) < 1) dy = 1;
+      const a = Math.atan2(dy, dx);
+      c.strokeStyle = `rgba(255,60,40,${(0.85 * (1 - hd.age)).toFixed(3)})`;
+      c.lineWidth = 7;
+      c.beginPath(); c.arc(cx, cy, R, a - 0.35, a + 0.35); c.stroke();
+    }
   }
 
   // ---------- 小型機 ----------
@@ -427,23 +452,25 @@ export class Hud {
     this.valueBox('高度', String(Math.round(st.altitude)), 'm', cx - sp, yMid + 54);
     this.attitudeBall(cx, H - 70, 34, st.attitude.pitch, st.attitude.roll);
     const isJet = this.def.id === 'jetsuit';
-    if (isJet && st.fuel != null) this.fuelGauge(st.fuel);
-    const lab = isJet ? '推力' : 'コレクティブ';
+    if (st.fuel != null) this.fuelGauge(st.fuel, isJet ? '燃料' : '電池');
+    const lab = isJet || this.def.id === 'drone' ? '推力' : 'コレクティブ';
     this.statusLine([
       `${lab} ${Math.round(st.throttle * 100)}%`,
       st.kGE && st.kGE > 1.03 ? '地面効果' : null,
-      st.speed > 6 && st.speed < 30 && !isJet ? 'ETL' : null,
+      st.speed > 6 && st.speed < 30 && this.def.id === 'heli' ? 'ETL' : null,
       st.onGround ? '接地' : null,
     ], H - 18);
   }
-  fuelGauge(f) {
-    const x = this.W - this.safe.r - 196, y = 72;
+  fuelGauge(f, label = '燃料') {
+    // ミニマップ（右上）の左に置く
+    const x = this.mirror ? this.safe.l + 12 + 92 + 10 : this.W - this.safe.r - 12 - 92 - 10 - 120, y = 72;
+    this.fuelLabel = label;
     this.box(x, y, 120, 26, { r: 6 });
     const col = f < 0.15 ? '#ff6a4a' : f < 0.35 ? '#ffc23a' : '#3affb0';
     const c = this.ctx;
     c.fillStyle = col;
     c.fillRect(x + 40, y + 7, 72 * clamp(f, 0, 1), 12);
-    this.text('燃料', x + 20, y + 13, { size: 11 });
+    this.text(this.fuelLabel || '燃料', x + 20, y + 13, { size: label.length > 2 ? 9 : 11 });
     this.text(`${Math.round(f * 100)}%`, x + 76, y + 13, { size: 10, shadow: true });
   }
 
@@ -510,6 +537,227 @@ export class Hud {
     c.fillRect(x + 2, y + 2, 8, 56 * clamp(v, 0, 1));
     this.text(lab, x + 6, y + 70, { size: 10 });
   }
+  // ---------- リングの通過ゲート（距離感の手がかり） ----------
+  ringGate(st, r, extra) {
+    const c = this.ctx;
+    const ap = r.approach;
+    const v = extra.project(r.next);
+    const dist = ap ? ap.dist : 0;
+    const dy = r.next.y - st.pos.y;
+    const dyTxt = Math.abs(dy) < 8 ? '高さ OK' : `${dy > 0 ? '↑' : '↓'} ${Math.round(Math.abs(dy))} m`;
+    if (!v.onScreen) {
+      this.pointer(r.next, extra, '#3affb0', `${fmtDist(dist)}  ${dyTxt}`);
+      return;
+    }
+    const pass = ap && ap.willPass;
+    const col = pass ? '#3affb0' : '#ffb040';
+    const rad = Math.max(12, extra.projectRadius ? extra.projectRadius(r.next, r.nextRadius) : 20);
+    c.save();
+    c.strokeStyle = col;
+    c.lineWidth = 3;
+    if (!pass) c.setLineDash([10, 8]);
+    c.beginPath();
+    c.arc(v.x, v.y, rad, 0, Math.PI * 2);
+    c.stroke();
+    c.setLineDash([]);
+    // 四隅のかぎ（小さく見えても見つけやすく）
+    const k = Math.max(rad, 18) + 6;
+    c.lineWidth = 2.5;
+    for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      c.beginPath();
+      c.moveTo(v.x + sx * k, v.y + sy * (k - 10));
+      c.lineTo(v.x + sx * k, v.y + sy * k);
+      c.lineTo(v.x + sx * (k - 10), v.y + sy * k);
+      c.stroke();
+    }
+    c.restore();
+    const eta = ap && ap.eta != null && ap.eta < 99 ? `  ${ap.eta.toFixed(1)} 秒` : '';
+    let ly = v.y - k - 30;
+    if (ly < 112) ly = Math.min(this.H - 120, v.y + k + 16);
+    this.text(`${fmtDist(dist)}${eta}`, v.x, ly, { size: 14, color: col });
+    this.text(pass ? '通過コース OK' : dyTxt, v.x, ly + 18, { size: 12, color: pass ? '#3affb0' : '#ffe08a' });
+  }
+
+  // ---------- 射撃モード ----------
+  drawCombat(st, extra) {
+    const c = this.ctx;
+    const cb = st.combat;
+    const items = [`スコア ${cb.score}`, `❤ ${cb.health}`, `的 ${cb.targetsTotal - cb.targetsLeft}/${cb.targetsTotal}`];
+    if (cb.maxWaves) items.push(`敵 ${cb.enemiesLeft}（第${cb.wave}/${cb.maxWaves}波）`);
+    if (!cb.armed) items.push('風船に体当たり！');
+    this.statusLine(items, 74);
+    // 体力バー
+    const bw = 120, bx = this.cx - bw / 2, by = 92;
+    this.box(bx, by, bw, 8, { r: 4, fill: 'rgba(0,0,0,0.5)', stroke: null });
+    c.fillStyle = cb.health > 50 ? '#3affb0' : cb.health > 25 ? '#ffc23a' : '#ff4a3a';
+    c.fillRect(bx + 1, by + 1, (bw - 2) * (cb.health / 100), 6);
+    // 照準（銃口の向きの先）
+    if (cb.armed && extra.aim && extra.aim.onScreen) {
+      const a = extra.aim;
+      c.strokeStyle = '#ffffff';
+      c.lineWidth = 2;
+      c.beginPath(); c.arc(a.x, a.y, 16, 0, Math.PI * 2); c.stroke();
+      c.beginPath(); c.moveTo(a.x - 26, a.y); c.lineTo(a.x - 8, a.y); c.moveTo(a.x + 8, a.y); c.lineTo(a.x + 26, a.y); c.moveTo(a.x, a.y - 26); c.lineTo(a.x, a.y - 8); c.moveTo(a.x, a.y + 8); c.lineTo(a.x, a.y + 26); c.stroke();
+      // 偏差照準（目標の未来位置）。弾はここへ飛ぶ
+      const p = extra.pipper;
+      if (p && p.onScreen) {
+        c.strokeStyle = '#ffe24a';
+        c.lineWidth = 2;
+        c.setLineDash([4, 4]);
+        c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(p.x, p.y); c.stroke();
+        c.setLineDash([]);
+        c.beginPath(); c.arc(p.x, p.y, 7, 0, Math.PI * 2); c.stroke();
+        c.fillStyle = '#ffe24a';
+        c.beginPath(); c.arc(p.x, p.y, 2.5, 0, Math.PI * 2); c.fill();
+      }
+    }
+    // 敵・的の印
+    for (const t of extra.combatTargets || []) {
+      const v = extra.project(t.pos);
+      const col = t.kind === 'enemy' ? '#ff5a4a' : t.kind === 'ground' ? '#ffb040' : '#ffe0ff';
+      if (v.onScreen) {
+        c.strokeStyle = col;
+        c.lineWidth = 2;
+        const s = t.kind === 'enemy' ? 12 : 8;
+        c.beginPath(); c.moveTo(v.x, v.y - s); c.lineTo(v.x + s, v.y); c.lineTo(v.x, v.y + s); c.lineTo(v.x - s, v.y); c.closePath(); c.stroke();
+        if (t.kind === 'enemy' || t.nearest) this.text(fmtDist(t.dist), v.x, v.y + s + 11, { size: 11, color: col });
+        if (t.lock != null) {
+          // ロックオンの枠（進み具合で閉じていく）
+          const L = 28;
+          c.strokeStyle = t.locked ? '#ff3030' : '#ffffff';
+          c.lineWidth = t.locked ? 3 : 2;
+          c.strokeRect(v.x - L, v.y - L, L * 2, L * 2);
+          c.beginPath(); c.arc(v.x, v.y, L + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t.lock); c.stroke();
+          if (t.locked) this.text('LOCK', v.x, v.y - L - 12, { size: 13, color: '#ff3030', weight: 900 });
+        }
+      } else if (t.kind === 'enemy' || t.nearest) {
+        this.pointer(t.pos, extra, col, fmtDist(t.dist));
+      }
+    }
+  }
+
+  // ---------- レーダー（ミニマップ、機首方向が上） ----------
+  drawMinimap(st, extra) {
+    const c = this.ctx;
+    const R = 46;
+    const x0 = this.mirror ? this.safe.l + 12 + R : this.W - this.safe.r - 12 - R;
+    const y0 = 68 + R;
+    const range = extra.mapRange || 3000;
+    const k = R / range;
+    this.record(x0 - R, y0 - R, R * 2, R * 2, 'minimap');
+    c.save();
+    c.beginPath(); c.arc(x0, y0, R, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(8,16,28,0.6)'; c.fill();
+    c.strokeStyle = 'rgba(255,255,255,0.5)'; c.lineWidth = 1.5; c.stroke();
+    c.clip();
+    c.strokeStyle = 'rgba(255,255,255,0.15)';
+    c.beginPath(); c.arc(x0, y0, R / 2, 0, Math.PI * 2); c.stroke();
+    const hd = (st.attitude.heading * Math.PI) / 180;
+    const ch = Math.cos(hd), sh = Math.sin(hd);
+    const toMap = (x, z) => {
+      const dx = x - st.pos.x, dz = z - st.pos.z;
+      // 機首方向（北=−z を基準に heading 回転）を上に
+      const right = dx * ch + dz * sh;
+      const fwd = dx * sh - dz * ch;
+      return [x0 + right * k, y0 - fwd * k];
+    };
+    const dot = (x, z, col, r = 3, shape = 'dot') => {
+      let [px, py] = toMap(x, z);
+      const dd = Math.hypot(px - x0, py - y0);
+      if (dd > R - 3) { px = x0 + ((px - x0) / dd) * (R - 3); py = y0 + ((py - y0) / dd) * (R - 3); }
+      c.fillStyle = col;
+      c.beginPath();
+      if (shape === 'square') c.rect(px - r, py - r, r * 2, r * 2);
+      else if (shape === 'tri') { c.moveTo(px, py - r - 1); c.lineTo(px + r, py + r); c.lineTo(px - r, py + r); c.closePath(); }
+      else c.arc(px, py, r, 0, Math.PI * 2);
+      c.fill();
+    };
+    for (const it of extra.mapItems || []) dot(it.x, it.z, it.color, it.r || 3, it.shape);
+    c.restore();
+    // 自機
+    c.fillStyle = '#ffffff';
+    c.beginPath(); c.moveTo(x0, y0 - 6); c.lineTo(x0 + 4.5, y0 + 5); c.lineTo(x0, y0 + 2.5); c.lineTo(x0 - 4.5, y0 + 5); c.closePath(); c.fill();
+    // 北の印
+    const [nx, ny] = [x0 - sh * (R - 7), y0 - ch * (R - 7)];
+    this.text('N', nx, ny, { size: 10, color: '#ff8a7a' });
+    this.text(range >= 1000 ? `${(range / 1000).toFixed(range >= 3000 ? 0 : 1)}km` : `${range}m`, x0, y0 + R - 9, { size: 9, color: 'rgba(220,230,240,0.75)', weight: 600, shadow: false });
+    // 2 人プレイ: 通信の往復時間
+    if (extra.net) {
+      const rtt = extra.net.rtt;
+      const col = extra.net.weak ? '#ff6a4a' : rtt == null ? '#ccc' : rtt < 0.12 ? '#3affb0' : rtt < 0.25 ? '#ffc23a' : '#ff6a4a';
+      this.record(x0 - R, y0 + R + 3, R * 2, 14, 'net');
+      this.text(extra.net.weak ? '通信 —' : rtt == null ? '通信 …' : `通信 ${Math.round(rtt * 1000)}ms`, x0, y0 + R + 10, { size: 10, color: col, weight: 700 });
+    }
+  }
+
+  // ---------- 熱気球 ----------
+  drawBalloon(st) {
+    const H = this.H, cx = this.cx, sp = this.sp, yMid = H * 0.48;
+    const c = this.ctx;
+    const b = st.balloon || {};
+    this.valueBox('高度', String(Math.round(st.altitude)), 'm', cx + sp, yMid);
+    this.valueBox('対地高度', String(Math.round(st.agl)), 'm', cx + sp, yMid + 54, { color: st.agl < 50 ? '#ffe08a' : '#fff' });
+    this.valueBox('球皮温度', String(Math.round(b.temp ?? 0)), '℃', cx - sp, yMid, { color: (b.temp ?? 0) > 110 ? '#ff8a6a' : '#fff' });
+    this.valueBox('対地速度', String(Math.round(st.groundSpeed * KMH)), 'km/h', cx - sp, yMid + 54);
+    const v = st.vs;
+    const vcol = v > 0.2 ? '#3affb0' : v < -1.5 ? '#ff8a6a' : '#fff';
+    this.text('昇降率', cx, H - 92, { size: 10, color: 'rgba(220,230,240,0.85)', weight: 600 });
+    this.text(`${fmtSigned(v, 1)} m/s`, cx, H - 70, { size: 26, color: vcol, weight: 900 });
+    // 高さごとの風（機首方向基準の矢印）
+    const rows = [['+300 m', b.windAbove], ['現在', st.wind], ['−300 m', b.windBelow]];
+    // 画面上端（気球本体と重ならない位置）
+    const px = cx - 70, py0 = 26;
+    this.box(px - 60, py0 - 18, 200, 86, { r: 8 });
+    rows.forEach(([lab, w], i) => {
+      const y = py0 + i * 26;
+      this.text(lab, px - 18, y, { size: 11, color: i === 1 ? '#fff' : 'rgba(220,230,240,0.8)', weight: i === 1 ? 800 : 600 });
+      if (!w) return;
+      const ws = Math.hypot(w.x, w.z);
+      const wb = (Math.atan2(w.x, -w.z) * 180) / Math.PI;
+      const rel = ((wb - st.attitude.heading + 540) % 360) - 180;
+      c.save();
+      c.translate(px + 34, y);
+      c.rotate((rel * Math.PI) / 180);
+      c.strokeStyle = i === 1 ? '#9fd8ff' : 'rgba(159,216,255,0.7)';
+      c.lineWidth = 2.5;
+      c.beginPath(); c.moveTo(0, 9); c.lineTo(0, -9); c.moveTo(-5, -3); c.lineTo(0, -9); c.lineTo(5, -3); c.stroke();
+      c.restore();
+      this.text(`${ws.toFixed(1)} m/s`, px + 86, y, { size: 12, color: '#9fd8ff' });
+    });
+    // 目標の方向
+    const tdx = st.target.x - st.pos.x, tdz = st.target.z - st.pos.z;
+    const brg = (Math.atan2(tdx, -tdz) * 180) / Math.PI;
+    const rel = ((brg - st.attitude.heading + 540) % 360) - 180;
+    c.save();
+    c.translate(cx + 90, py0 + 26);
+    c.rotate((rel * Math.PI) / 180);
+    c.fillStyle = '#ffb040';
+    c.beginPath(); c.moveTo(0, -12); c.lineTo(8, 8); c.lineTo(0, 3); c.lineTo(-8, 8); c.closePath(); c.fill();
+    c.restore();
+    this.text(`目標 ${fmtDist(st.target.dist)}`, cx + 90, py0 + 50, { size: 12, color: '#ffd08a' });
+    this.statusLine([`バーナー ${Math.round((b.burner ?? 0) * 100)}%`, b.venting ? '排気中' : null, st.onGround ? '接地' : null], H - 18);
+  }
+
+  // ---------- 空飛ぶ車 ----------
+  drawCar(st) {
+    const H = this.H, cx = this.cx, sp = this.sp, yMid = H * 0.5;
+    const fly = st.carMode === 'fly';
+    this.headingTape(st.attitude.heading, 24);
+    this.valueBox('速度', String(Math.round(st.groundSpeed * KMH)), 'km/h', cx - sp, yMid);
+    if (fly) {
+      this.valueBox('対地高度', st.agl < 100 ? st.agl.toFixed(1) : String(Math.round(st.agl)), 'm', cx + sp, yMid);
+      this.valueBox('昇降率', fmtSigned(st.vs, 1), 'm/s', cx + sp, yMid + 54);
+      this.attitudeBall(cx, H - 70, 34, st.attitude.pitch, st.attitude.roll);
+    } else {
+      this.valueBox('標高', String(Math.round(st.altitude)), 'm', cx + sp, yMid);
+    }
+    if (st.fuel != null) this.fuelGauge(st.fuel, 'バッテリー');
+    this.statusLine([fly ? '✈ 飛行モード' : '🚗 走行モード', `${fly ? '推力' : 'アクセル'} ${Math.round(st.throttle * 100)}%`, fly && st.onGround ? '接地' : null], H - 18);
+  }
+}
+
+export function fmtDist(d) {
+  return d >= 1000 ? `${(d / 1000).toFixed(1)} km` : `${Math.round(d)} m`;
 }
 
 export function fmtTime(t) {

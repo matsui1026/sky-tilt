@@ -9,7 +9,10 @@ import { createHeli, stepHeli, hoverCollective } from './vehicles/heli.js';
 import { createParaglider, stepParaglider } from './vehicles/paraglider.js';
 import { createJetsuit, stepJetsuit, jetsuitHoverThrottle } from './vehicles/jetsuit.js';
 import { createHuman, stepHuman, humanDeploy } from './vehicles/human.js';
-import { createRingCourse, RingTracker, rateLanding } from './modes.js';
+import { createBalloon, stepBalloon, hoverBurner, airTemp } from './vehicles/balloon.js';
+import { createFlycar, stepFlycar, flycarToggleMode, flycarHoverThrottle } from './vehicles/flycar.js';
+import { createRingCourse, RingTracker, rateLanding, ringApproach } from './modes.js';
+import { Combat } from './combat.js';
 import { fieldLocal } from './terrainGen.js';
 
 export const DT = 1 / 60;
@@ -20,6 +23,8 @@ const MODELS = {
   paraglider: { create: createParaglider, step: stepParaglider },
   jetsuit: { create: createJetsuit, step: stepJetsuit },
   human: { create: createHuman, step: stepHuman },
+  balloon: { create: createBalloon, step: stepBalloon },
+  flycar: { create: createFlycar, step: stepFlycar },
 };
 
 const terrainCache = new Map();
@@ -38,7 +43,8 @@ export function getTerrain(locationId, seed) {
 export function contactOffset(def) {
   const P = def.p;
   if (def.model === 'fixedwing') return P.ground.gearHeight;
-  if (def.model === 'heli' || def.model === 'jetsuit') return P.cgHeight;
+  if (def.model === 'heli' || def.model === 'jetsuit' || def.model === 'flycar') return P.cgHeight;
+  if (def.model === 'balloon') return P.basketHeight;
   return 0.9;
 }
 
@@ -49,7 +55,8 @@ export class Simulation {
   }
 
   /**
-   * opts: { seed, time, weather, mode, calm, thermals, spawn: {pos, heading(deg), speed, onGround, throttle, phase} }
+   * opts: { seed, time, weather, mode, calm, thermals, pvp, rings(リング列を外から与える),
+   *         spawn: {pos, heading(deg), speed, onGround, throttle, phase} }
    */
   load(vehicleId, locationId, opts = {}) {
     const def = getVehicle(vehicleId);
@@ -67,8 +74,18 @@ export class Simulation {
     this.crashCause = null;
     this.result = null;
     const spawn = this.computeSpawn(opts.spawn);
+    if (opts.spawnOffset) {
+      // 2 人プレイのゲスト: ホストの右後ろに並ぶ（地上なら横に 22 m）
+      const hd = spawn.heading || 0;
+      const rx = Math.cos(hd), rz = Math.sin(hd);
+      const fx = Math.sin(hd), fz = -Math.cos(hd);
+      const side = spawn.onGround ? 22 : 40;
+      const back = spawn.onGround ? 0 : 30;
+      spawn.pos = { x: spawn.pos.x + rx * side - fx * back, y: spawn.pos.y + (spawn.onGround ? 0 : 15), z: spawn.pos.z + rz * side - fz * back };
+      if (spawn.onGround) spawn.pos.y = this.world.terrain.surfaceAt(spawn.pos.x, spawn.pos.z) + contactOffset(def);
+    }
     this.spawn = spawn;
-    this.vs = MODELS[def.model].create(def, spawn);
+    this.vs = MODELS[def.model].create(def, spawn, this.world);
     this.ctl = {
       pitch: 0, roll: 0, yaw: 0,
       throttle: spawn.throttle ?? 0,
@@ -76,14 +93,23 @@ export class Simulation {
       gear: spawn.gear !== false,
       spoiler: false,
       ab: false,
+      fire: false,
+      burner: false,
+      vent: false,
     };
     this.tracker = null;
+    this.rings = [];
     if (this.mode === 'rings') {
-      this.rings = createRingCourse(this.world, def, { pos: spawn.pos, heading: spawn.heading });
+      this.rings = opts.rings ? opts.rings.map((r) => ({ pos: { ...r.pos }, normal: { ...r.normal }, radius: r.radius }))
+        : createRingCourse(this.world, opts.courseVehicle ? getVehicle(opts.courseVehicle) : def, { pos: spawn.pos, heading: spawn.heading });
+      // 2 人プレイ: 遅い方の機体に合わせたコース。輪の大きさは大きい方
+      if (opts.ringRadius) for (const r of this.rings) r.radius = Math.max(r.radius, opts.ringRadius);
       this.tracker = new RingTracker(this.rings);
-    } else {
-      this.rings = [];
     }
+    this.combat = this.mode === 'combat'
+      ? new Combat(this.world, def, { pvp: !!opts.pvp, spawn: { pos: { ...spawn.pos }, heading: spawn.heading }, difficulty: opts.difficulty, targets: opts.targets })
+      : null;
+    this._stillT = 0;
     this._env = {
       world: this.world,
       t: 0,
@@ -98,8 +124,10 @@ export class Simulation {
   }
 
   emit(type, data = {}) {
-    this.events.push({ type, t: this.t, ...data });
-    if (type === 'landed' && this.status === 'flying') {
+    this.events.push({ ...data, type, t: this.t });
+    // 空飛ぶ車は自由飛行で着地しても走り続けられるので評価を出さない（着陸モードのみ）
+    const rateIt = this.mode !== 'combat' && !(this.def.model === 'flycar' && this.mode !== 'landing');
+    if (type === 'landed' && this.status === 'flying' && rateIt) {
       const r = rateLanding(this.def, data, this.world.terrain.field);
       this.result = { type: 'landing', mode: this.mode, ...r };
       this.status = 'landed';
@@ -107,6 +135,11 @@ export class Simulation {
     }
     if (type === 'courseFinished') {
       this.result = { type: 'rings', ...data };
+      this.status = 'finished';
+      this.events.push({ type: 'result', t: this.t, result: this.result });
+    }
+    if (type === 'combatFinished') {
+      this.result = { ...data, type: 'combat' };
       this.status = 'finished';
       this.events.push({ type: 'result', t: this.t, result: this.result });
     }
@@ -133,6 +166,9 @@ export class Simulation {
     if (inp.roll != null) c.roll = clamp(+inp.roll, -1, 1);
     if (inp.yaw != null) c.yaw = clamp(+inp.yaw, -1, 1);
     if (inp.throttle != null) c.throttle = clamp(+inp.throttle, 0, 1);
+    if (inp.fire != null) c.fire = !!inp.fire;
+    if (inp.burner != null) c.burner = !!inp.burner;
+    if (inp.vent != null) c.vent = !!inp.vent;
   }
 
   /** 機体固有ボタン */
@@ -156,6 +192,12 @@ export class Simulation {
       case 'deploy':
         if (def.model === 'human') return humanDeploy(def, this.vs, this._env, false);
         return false;
+      case 'carMode':
+        if (def.model === 'flycar') return flycarToggleMode(def, this.vs, this._env);
+        return null;
+      case 'missile':
+        if (this.combat && this.status === 'flying') return this.combat.fireMissile(this.vs);
+        return false;
       default:
         return null;
     }
@@ -169,12 +211,31 @@ export class Simulation {
       const prev = { ...this.vs.pos };
       this._env.t = this.t;
       model.step(this.def, this.vs, this.ctl, this._env, DT);
+      if (this.combat && this.status !== 'crashed') {
+        this.combat.step(this.vs, this.ctl, this._env, DT);
+        for (const e of this.combat.drainEvents()) this.emit(e.type, e);
+        // 着地して止まり、自力で飛び直せない機体はその時点で終了
+        if (!this.canRelaunch() && this.vs.onGround && vlen(this.vs.vel) < 1.5) {
+          this._stillT += DT;
+          if (this._stillT > 1.5) {
+            this.combat.finishEarly('landed');
+            for (const e of this.combat.drainEvents()) this.emit(e.type, e);
+          }
+        } else this._stillT = 0;
+      }
       this.t += DT;
       this.stepCount++;
       if (this.tracker && this.status === 'flying') this.tracker.update(prev, this.vs.pos, this.t, (ty, d) => this.emit(ty, d));
       if (!Number.isFinite(this.vs.pos.x + this.vs.pos.y + this.vs.pos.z)) this.crash('数値エラー');
     }
     return this;
+  }
+
+  /** 着地したあと自力で飛び立てるか */
+  canRelaunch() {
+    const m = this.def.model;
+    if (m === 'heli' || m === 'jetsuit' || m === 'flycar' || m === 'balloon') return true;
+    return m === 'fixedwing' && this.def.p.thrust.type !== 'none';
   }
 
   // ---------- 出現位置 ----------
@@ -192,7 +253,8 @@ export class Simulation {
       return sp;
     }
     if (this.mode === 'landing') return this.approachSpawn();
-    if (this.mode !== 'rings' && def.groundStart && field.type === 'runway') {
+    const airOnly = this.mode === 'rings' || this.mode === 'combat';
+    if (!airOnly && def.groundStart && (field.type === 'runway' || def.groundStartAnywhere)) {
       const along = def.model === 'fixedwing' ? -(field.length / 2 - 80) : -(field.length / 2 - 30);
       return {
         pos: { x: field.x + fF.x * along, y: field.elevation + contactOffset(def), z: field.z + fF.z * along },
@@ -200,11 +262,11 @@ export class Simulation {
       };
     }
     const sa = def.spawnAir;
-    if (def.model === 'paraglider') {
+    if (def.model === 'paraglider' && !airOnly) {
       const r = this.ridgeSpawn();
       if (r) return r;
     }
-    if (def.model === 'human' && def.startPhase === 'freefall') {
+    if (def.model === 'human' && def.startPhase === 'freefall' && this.mode !== 'combat') {
       const wd = world.windDir;
       const x = field.x - wd.x * 600, z = field.z - wd.z * 600;
       const hd = Math.atan2(field.x - x, -(field.z - z));
@@ -224,8 +286,11 @@ export class Simulation {
 
   hoverThrottleAt(y) {
     const def = this.def;
-    if (def.model === 'heli') return hoverCollective(def.p, airDensity(y));
-    if (def.model === 'jetsuit') return jetsuitHoverThrottle(def.p, airDensity(y));
+    const rho = airDensity(y);
+    if (def.model === 'heli') return hoverCollective(def.p, rho);
+    if (def.model === 'jetsuit') return jetsuitHoverThrottle(def.p, rho);
+    if (def.model === 'flycar') return flycarHoverThrottle(def.p, rho);
+    if (def.model === 'balloon') return hoverBurner(def.p, rho, airTemp(y));
     return null;
   }
 
@@ -276,7 +341,7 @@ export class Simulation {
     const fF = { x: Math.sin(fh), z: -Math.cos(fh) };
     const ap = def.approach || {};
     const wd = world.windDir;
-    if (def.model === 'fixedwing') {
+    if (def.model === 'fixedwing' && def.p.thrust.type !== 'none') {
       const aimAlong = -(field.length / 2 - 300);
       const aim = { x: field.x + fF.x * aimAlong, z: field.z + fF.z * aimAlong };
       const d = ap.dist;
@@ -286,23 +351,28 @@ export class Simulation {
       for (let k = 0; k <= 20; k++) {
         const f = k / 20;
         const px = x + (aim.x - x) * f, pz = z + (aim.z - z) * f;
-        const need = terr.surfaceAt(px, pz) + 60 + (1 - f) * 0;
+        const need = terr.surfaceAt(px, pz) + 60;
         const yAt = y - (y - field.elevation) * f;
         if (yAt < need) y += need - yAt;
       }
       return { pos: { x, y, z }, heading: fh, speed: ap.speed, throttle: ap.throttle, flaps: ap.flaps ?? 0, gear: ap.gear !== false, pitch: 1 * DEG, onGround: false };
     }
     let dir;
-    if (def.model === 'heli' || def.model === 'jetsuit') dir = fF;
-    else dir = { x: wd.x, z: wd.z }; // 追い風で目標へ向かう
     const d = ap.dist;
+    if (def.model === 'heli' || def.model === 'jetsuit' || def.model === 'flycar' || def.model === 'fixedwing') dir = fF;
+    else if (def.model === 'balloon') {
+      // 熱気球: その高さの風に乗って目標の上を通る位置から
+      const w = world.baseWindAt(ap.agl || 300);
+      const ws = Math.hypot(w.x, w.z);
+      dir = ws > 0.3 ? { x: w.x / ws, z: w.z / ws } : fF;
+    } else dir = { x: wd.x, z: wd.z }; // 追い風で目標へ向かう
     const x = field.x - dir.x * d, z = field.z - dir.z * d;
     const hd = Math.atan2(dir.x, -dir.z);
     let y = Math.max(field.elevation, terr.surfaceAt(x, z)) + (ap.agl || 100);
-    if (def.model === 'human') y = Math.max(y, this.maxTerrainAhead(x, z, hd, d) + 400);
+    if (def.model === 'human' || def.model === 'fixedwing') y = Math.max(y, this.maxTerrainAhead(x, z, hd, d) + (def.model === 'human' ? 400 : 120));
     return {
       pos: { x, y, z }, heading: hd, speed: ap.speed ?? def.spawnAir.speed, onGround: false,
-      throttle: this.hoverThrottleAt(y) ?? 0,
+      throttle: this.hoverThrottleAt(y) ?? ap.throttle ?? 0,
       phase: def.startPhase,
     };
   }
@@ -322,13 +392,17 @@ export class Simulation {
     let rings = null;
     if (this.tracker) {
       const tr = this.tracker;
+      const nextRing = tr.rings[tr.index];
       rings = {
         index: tr.index, total: tr.rings.length, passed: tr.passed, missed: tr.missed,
         penalty: tr.penalty, time: tr.finished ? tr.finishTime : this.t + tr.penalty, finished: tr.finished,
-        next: tr.rings[tr.index] ? { ...tr.rings[tr.index].pos } : null,
+        next: nextRing ? { ...nextRing.pos } : null,
+        nextRadius: nextRing ? nextRing.radius : null,
+        approach: nextRing ? ringApproach(nextRing, s.pos, s.vel) : null,
       };
     }
-    return {
+    const wind = this.world.baseWindAt(agl);
+    const res = {
       t: this.t,
       step: this.stepCount,
       vehicleId: def.id,
@@ -352,7 +426,7 @@ export class Simulation {
       onGround: !!s.onGround,
       throttle: s.throttle ?? s.collective ?? 0,
       throttleCmd: this.ctl.throttle,
-      input: { pitch: this.ctl.pitch, roll: this.ctl.roll, yaw: this.ctl.yaw },
+      input: { pitch: this.ctl.pitch, roll: this.ctl.roll, yaw: this.ctl.yaw, fire: this.ctl.fire },
       flaps: this.ctl.flaps,
       flapPos: s.flapPos ?? 0,
       gear: s.gearPos ?? null,
@@ -362,15 +436,27 @@ export class Simulation {
       aFloor: !!s.aFloor,
       fuel: s.fuel ?? null,
       phase: s.phase ?? null,
+      carMode: s.mode ?? null,
       brakes: s.brakes ?? null,
       glideRatio: vs < -0.2 ? gs / -vs : null,
       kGE: s.kGE ?? null,
       liftoffSpeed: s.liftoffSpeed ?? null,
-      wind: { x: this.world.windDir.x * this.world.windSpeed, z: this.world.windDir.z * this.world.windSpeed },
+      wind,
       target: { x: field.x, z: field.z, elevation: field.elevation, dist: Math.hypot(s.pos.x - field.x, s.pos.z - field.z), u: fl.u, v: fl.v },
       rings,
+      combat: this.combat ? this.combat.summary(s.pos) : null,
       result: this.result,
       outOfBounds: Math.abs(s.pos.x) > terr.half || Math.abs(s.pos.z) > terr.half,
     };
+    if (def.model === 'balloon') {
+      res.balloon = {
+        temp: s.temp - 273.15,
+        burner: s.burner,
+        venting: !!s.venting,
+        windAbove: this.world.baseWindAt(agl + 300),
+        windBelow: this.world.baseWindAt(Math.max(0, agl - 300)),
+      };
+    }
+    return res;
   }
 }

@@ -143,6 +143,26 @@ export class AudioEngine {
         e.hp = null;
         break;
       }
+      case 'drone': {
+        // 4 つの小さなプロペラの高い唸り（わずかにずらしてうなりを出す）
+        e.whine = this._osc('sawtooth', 200, 0);
+        e.whine2 = this._osc('sawtooth', 207, 0);
+        e.roar = this._noiseChain('bandpass', 1800, 1.2);
+        break;
+      }
+      case 'ev': {
+        // 電気モーターの高い音＋（飛行時）ファンの風切り
+        e.whine = this._osc('sine', 300, 0);
+        e.whine2 = this._osc('triangle', 600, 0);
+        e.roar = this._noiseChain('bandpass', 700, 0.8);
+        e.rumble = this._noiseChain('lowpass', 160, 0.7);
+        break;
+      }
+      case 'balloon': {
+        e.roar = this._noiseChain('bandpass', 350, 0.6);
+        e.rumble = this._noiseChain('lowpass', 90, 0.7);
+        break;
+      }
       default:
     }
     this.engine = e;
@@ -157,6 +177,7 @@ export class AudioEngine {
       try { n.g.disconnect(); } catch (err) { /* 切断済み */ }
     };
     ['osc1', 'osc2', 'lfo', 'noise', 'roar', 'whine', 'whine2', 'rumble', 'body'].forEach((k) => stop(e[k]));
+    if (this.gun) { stop(this.gun); stop(this.gunLfo); this.gun = null; this.gunLfo = null; }
     this.engine = null;
   }
 
@@ -223,6 +244,33 @@ export class AudioEngine {
           e.whine.g.gain.setTargetAtTime(on * 0.012 * rpm, t, tc);
           break;
         }
+        case 'drone': {
+          const f = s.baseFreq + (s.maxFreq - s.baseFreq) * thr;
+          e.whine.o.frequency.setTargetAtTime(f, t, tc);
+          e.whine2.o.frequency.setTargetAtTime(f * 1.035, t, tc);
+          e.whine.g.gain.setTargetAtTime(on * (0.012 + 0.035 * thr), t, tc);
+          e.whine2.g.gain.setTargetAtTime(on * (0.01 + 0.03 * thr), t, tc);
+          e.roar.g.gain.setTargetAtTime(on * thr * 0.08, t, tc);
+          break;
+        }
+        case 'ev': {
+          const flying = state.carMode === 'fly';
+          const spd = Math.min(1, (state.groundSpeed || 0) / 80);
+          const k = flying ? thr : Math.max(thr * 0.6, spd);
+          e.whine.o.frequency.setTargetAtTime(s.baseFreq * 2 + k * s.maxFreq * 2, t, tc);
+          e.whine2.o.frequency.setTargetAtTime(s.baseFreq * 4 + k * s.maxFreq * 3, t, tc);
+          e.whine.g.gain.setTargetAtTime(on * (0.008 + 0.03 * k), t, tc);
+          e.whine2.g.gain.setTargetAtTime(on * 0.012 * k, t, tc);
+          e.roar.g.gain.setTargetAtTime(on * (flying ? 0.05 + thr * 0.3 : 0), t, tc);
+          e.rumble.g.gain.setTargetAtTime(on * (flying ? 0 : spd * 0.15), t, tc);
+          break;
+        }
+        case 'balloon': {
+          const b = vs.burner ?? 0;
+          e.roar.g.gain.setTargetAtTime(on * b * 0.45, t, 0.05);
+          e.rumble.g.gain.setTargetAtTime(on * b * 0.35, t, 0.05);
+          break;
+        }
         case 'jetsuit': {
           e.roar.f.frequency.setTargetAtTime(500 + thr * 1500, t, tc);
           e.roar.g.gain.setTargetAtTime(on * thr * 0.45, t, tc);
@@ -233,6 +281,21 @@ export class AudioEngine {
         default:
       }
     }
+
+    // 射撃音（撃っている間、発射レートで断続するノイズ）
+    const firing = active && state.input && state.input.fire && state.combat && state.combat.armed && state.combat.ammo > 0;
+    if (firing && !this.gun) {
+      this.gun = this._noiseChain('bandpass', 1400, 0.9);
+      this.gunGate = ctx.createGain();
+      this.gun.g.disconnect();
+      this.gun.g.connect(this.gunGate).connect(this.master);
+      this.gunLfo = this._osc('square', def.weapon ? def.weapon.rate : 12, 0);
+      this.gunLfo.g.disconnect();
+      this.gunLfo.g.connect(this.gunGate.gain);
+      this.gunLfo.g.gain.value = 0.5;
+      this.gunGate.gain.value = 0.5;
+    }
+    if (this.gun) this.gun.g.gain.setTargetAtTime(firing ? 0.35 : 0, t, 0.02);
 
     // 失速警報
     if (active && state.stallWarn && t > this.stallNext) {
@@ -304,6 +367,26 @@ export class AudioEngine {
         break;
       case 'touchdown':
         this._burst(200, 0.25, Math.min(0.6, 0.15 + Math.abs(ev.vs || 0) * 0.15));
+        break;
+      case 'kill':
+        this._burst(600, 1.2, 0.8);
+        this._burst(90, 1.6, 0.7);
+        break;
+      case 'pop':
+        this._burst(2500, 0.12, 0.5, 'highpass');
+        break;
+      case 'playerHit':
+        this._burst(180, 0.15, 0.6);
+        break;
+      case 'lock':
+        this._beep(1500, 0.08, 'square', 0.1);
+        setTimeout(() => this.ctx && this._beep(1500, 0.08, 'square', 0.1), 120);
+        break;
+      case 'missile':
+        this._burst(900, 1.0, 0.45, 'bandpass');
+        break;
+      case 'noLock':
+        this._beep(300, 0.15, 'square', 0.06);
         break;
       case 'deploy':
         this._burst(1500, 0.8, 0.25, 'highpass');

@@ -5,6 +5,7 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 export default defineConfig({
   base: './',
   plugins: [viteSingleFile()],
+  define: { __SINGLE_FILE__: 'true' },
   build: {
     outDir: 'dist-single',
     emptyOutDir: true,

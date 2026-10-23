@@ -1,10 +1,11 @@
 // PC デバッグ用キーボード操作
 // W/↑: 機首下げ  S/↓: 機首上げ  A/←, D/→: ロール  Q/E: ヨー  Shift/Ctrl: スロットル増減
-// F: フラップ  G: ギア  X: スポイラー  B: アフターバーナー  Space: パラシュート  C: カメラ  R: 再キャリブレーション  Esc/P: 一時停止
+// F: フラップ  G: ギア  X: スポイラー  B: アフターバーナー  Space: パラシュート  T: 飛行⇄走行  C: カメラ  R: 再キャリブレーション  Esc/P: 一時停止
+// K / Enter: 射撃（押している間）  M: ミサイル  H: バーナー（押している間）  J: 排気弁（押している間）
 import { approach } from '../sim/math.js';
 
-const ACTION_KEYS = { KeyF: 'flaps', KeyG: 'gear', KeyX: 'spoiler', KeyB: 'ab', Space: 'deploy' };
-const UI_KEYS = { KeyC: 'camera', KeyR: 'recalibrate', Escape: 'pause', KeyP: 'pause' };
+const ACTION_KEYS = { KeyF: 'flaps', KeyG: 'gear', KeyX: 'spoiler', KeyB: 'ab', Space: 'deploy', KeyT: 'carMode', KeyM: 'missile' };
+const UI_KEYS = { KeyC: 'camera', KeyR: 'recalibrate', Escape: 'pause', KeyP: 'pause', KeyY: 'warp' };
 
 export class KeyboardInput {
   constructor({ onAction, onUi } = {}) {
@@ -42,5 +43,8 @@ export class KeyboardInput {
     if (this.active) this.used = true;
     this.yaw = (k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0);
     this.throttleDelta = (k.has('ShiftLeft', 'ShiftRight') ? 1 : 0) - (k.has('ControlLeft', 'ControlRight') ? 1 : 0);
+    this.fire = k.has('KeyK', 'Enter', 'NumpadEnter');
+    this.burner = k.has('KeyH');
+    this.vent = k.has('KeyJ');
   }
 }

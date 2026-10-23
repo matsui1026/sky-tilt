@@ -1,12 +1,20 @@
 // 機体定義（データ）。新しい機体はここに追加する。
 // 単位: SI（m, kg, s, N, rad）。角度パラメータは deg() で度から変換。
 //
-// model: 'fixedwing' | 'heli' | 'paraglider' | 'jetsuit' | 'human'
+// model: 'fixedwing' | 'heli' | 'paraglider' | 'jetsuit' | 'human' | 'balloon' | 'flycar'
 //   human は wingsuit / skydive（自由落下→展開→キャノピー）で共有する人体モデル。
-// hud:   'basic' | 'pfd' | 'fighter' | 'heli' | 'glide'
-// buttons: 左手側に並ぶ機体固有ボタン（id は sim.action / 入力 yaw と対応）
+//   heli はドローンでも使う（パラメータ違い）。
+// hud:   'basic' | 'pfd' | 'fighter' | 'heli' | 'glide' | 'balloon' | 'car'
+// buttons: 左手側に並ぶ機体固有ボタン（id は sim.action / 入力 yaw と対応）。desc は操作ガイドに表示。
+// weapon: 射撃モードで使える武器（無い機体は風船に体当たりして割る）
+// guide: 操作ガイド・初回の操作説明の文言
 
 const deg = (d) => (d * Math.PI) / 180;
+
+const RUDDER = [
+  { id: 'rudderL', label: '◀ ラダー', type: 'hold', desc: '押している間、機首を左へ向ける（細かい向きの調整。地上では左へ曲がる）' },
+  { id: 'rudderR', label: 'ラダー ▶', type: 'hold', desc: '押している間、機首を右へ向ける（地上では右へ曲がる）' },
+];
 
 export const VEHICLES = {
   prop: {
@@ -14,15 +22,21 @@ export const VEHICLES = {
     name: '小型プロペラ機 TP-1',
     short: 'プロペラ機',
     desc: '素直で失速しにくい練習機。最初の1機に。',
+    category: 'plane',
     stats: { speed: 2, agility: 3, difficulty: 1 },
     model: 'fixedwing',
     hud: 'basic',
     groundStart: true,
     buttons: [
-      { id: 'rudderL', label: '◀ ラダー', type: 'hold' },
-      { id: 'rudderR', label: 'ラダー ▶', type: 'hold' },
-      { id: 'flaps', label: 'フラップ', type: 'cycle' },
+      ...RUDDER,
+      { id: 'flaps', label: 'フラップ', type: 'cycle', desc: '押すたびに UP → 1 → 2。下げると遅い速度でも浮く（離着陸向け）が、抵抗が増えて減速する' },
     ],
+    weapon: { name: '機銃', rate: 12, speed: 750, damage: 10, ammo: 600, spread: 0.004 },
+    guide: {
+      tilt: 'ハンドルのように左右に回すと、その角度でバンクして旋回（戻すと水平に戻る）。上端を手前に引くと機首上げ、奥へ倒すと機首下げ。',
+      throttle: 'エンジン出力。0% で地上ではブレーキ。',
+      tips: ['離陸: 出力 100% → 約 90 km/h で手前に引く → 約 110 km/h で浮く。', '着陸: 出力を絞ってゆっくり降下。地面すれすれで少し引いて沈下を止める。'],
+    },
     sound: { type: 'prop', baseFreq: 55, maxFreq: 140 },
     camera: { cockpit: [0, 0.55, -0.6], chaseDist: 14, chaseHeight: 3.5, fovBase: 70 },
     spawnAir: { agl: 400, speed: 50, throttle: 0.65 },
@@ -55,17 +69,23 @@ export const VEHICLES = {
     name: '旅客機 LJ-200',
     short: '旅客機',
     desc: '重くゆったり。フライ・バイ・ワイヤが姿勢と失速を守る。',
+    category: 'plane',
     stats: { speed: 4, agility: 1, difficulty: 3 },
     model: 'fixedwing',
     hud: 'pfd',
     groundStart: true,
     buttons: [
-      { id: 'flaps', label: 'フラップ', type: 'cycle' },
-      { id: 'gear', label: 'ギア', type: 'toggle' },
-      { id: 'spoiler', label: 'スポイラー', type: 'toggle' },
-      { id: 'rudderL', label: '◀ ラダー', type: 'hold' },
-      { id: 'rudderR', label: 'ラダー ▶', type: 'hold' },
+      { id: 'flaps', label: 'フラップ', type: 'cycle', desc: '押すたびに UP → 1 → FULL。離陸は 1、着陸は FULL。速度が落ちても浮きやすくなる' },
+      { id: 'gear', label: 'ギア', type: 'toggle', desc: '車輪の出し入れ（空中のみ）。上げると抵抗が減る。出さずに着陸すると胴体着陸で墜落' },
+      { id: 'spoiler', label: 'スポイラー', type: 'toggle', desc: '翼の上の板を立てて減速・降下する。着陸後に立てると強いブレーキ' },
+      ...RUDDER,
     ],
+    weapon: null,
+    guide: {
+      tilt: '左右でロール（最大 67° で自動的に止まる。手を戻すと 33° まで戻る）。手前で機首上げ、奥で機首下げ（+30°/−15° で止まる）。',
+      throttle: '左右エンジンの推力。失速しそうになると自動で最大推力になる（A.FLOOR）。',
+      tips: ['離陸: フラップ 1・推力 100% → 約 250 km/h でゆっくり引く。', '着陸: フラップ FULL・ギア DOWN・約 270 km/h で 3° の角度で降下。接地したら推力 0% とスポイラー。'],
+    },
     sound: { type: 'turbofan', baseFreq: 80, maxFreq: 260 },
     // lookY: PFD（画面下部）に機体が隠れないよう、機体を画面の上寄りに映す
     camera: { cockpit: [0, 2.0, -15.5], chaseDist: 70, chaseHeight: 14, fovBase: 65, lookY: -22 },
@@ -99,16 +119,22 @@ export const VEHICLES = {
     name: '戦闘機 FX-9',
     short: '戦闘機',
     desc: '鋭いロールと高G機動。アフターバーナーで一気に加速。',
+    category: 'plane',
     stats: { speed: 5, agility: 5, difficulty: 4 },
     model: 'fixedwing',
     hud: 'fighter',
     groundStart: true,
     buttons: [
-      { id: 'ab', label: 'A/B', type: 'toggle' },
-      { id: 'gear', label: 'ギア', type: 'toggle' },
-      { id: 'rudderL', label: '◀ ラダー', type: 'hold' },
-      { id: 'rudderR', label: 'ラダー ▶', type: 'hold' },
+      { id: 'ab', label: 'A/B', type: 'toggle', desc: 'アフターバーナー。入れると推力が最大になり大きく加速する（推力 85% 以上で作動）' },
+      { id: 'gear', label: 'ギア', type: 'toggle', desc: '車輪の出し入れ（空中のみ）。着陸前に必ず出す' },
+      ...RUDDER,
     ],
+    weapon: { name: '機関砲', rate: 30, speed: 1000, damage: 12, ammo: 600, spread: 0.003, missiles: 4, lockRange: 3000, lockCone: deg(14), lockTime: 1.0 },
+    guide: {
+      tilt: '左右で素早くロール（傾けている間ずっと回る）。手前に引くと強く旋回（最大 9G）、奥で機首下げ。低速で引き続けると失速、戻せば回復。',
+      throttle: 'エンジン推力。A/B と組み合わせて超音速まで。',
+      tips: ['強く引き続けると G で視界が暗くなる。少し緩めると戻る。', '射撃モード: 敵を前方の円の中に入れ続けるとロックオン、ミサイルで追尾攻撃。'],
+    },
     sound: { type: 'jet', baseFreq: 120, maxFreq: 420 },
     camera: { cockpit: [0, 0.9, -4.2], chaseDist: 24, chaseHeight: 5, fovBase: 72 },
     spawnAir: { agl: 1500, speed: 220, throttle: 0.75, gear: false },
@@ -136,19 +162,73 @@ export const VEHICLES = {
     },
   },
 
+  sailplane: {
+    id: 'sailplane',
+    name: 'グライダー SG-2',
+    short: 'グライダー',
+    desc: 'エンジンなしで滑空比 37。上昇気流をつないで遠くまで。',
+    category: 'glider',
+    stats: { speed: 2, agility: 2, difficulty: 3 },
+    model: 'fixedwing',
+    hud: 'glide',
+    groundStart: false,
+    buttons: [
+      { id: 'spoiler', label: 'エアブレーキ', type: 'toggle', desc: '翼から板を出して沈下を増やす。着陸の降下角の調整や、高すぎるときに使う' },
+      ...RUDDER,
+    ],
+    weapon: null,
+    guide: {
+      tilt: 'ハンドルのように回すとその角度でバンクして旋回（戻すと水平）。手前で減速（引きすぎると失速）、奥で加速。',
+      throttle: 'エンジンが無いのでスロットルはありません。',
+      tips: ['約 105 km/h が最も遠くまで飛べる速度（滑空比 37）。', 'サーマル（積雲の下）でバンク 30° くらいの小さな円を描いて上昇。斜面の風上側でも上昇できる。', '着陸はエアブレーキで降下角を調整。'],
+    },
+    sound: { type: 'none' },
+    camera: { cockpit: [0, 0.5, -1.2], chaseDist: 16, chaseHeight: 3.5, fovBase: 70 },
+    spawnAir: { agl: 600, speed: 29, throttle: 0 },
+    approach: { dist: 3000, speed: 27, throttle: 0, agl: 260 },
+    ringRadius: 28, ringSpacingTime: 10, ringGlide: 14,
+    initialThrottle: 0,
+    p: {
+      mass: 450, S: 11,
+      CL0: 0.35, CLa: 5.6, alphaStall: deg(13), alphaStallNeg: deg(-10),
+      CD0: 0.010, k: 0.018, CYb: 0.9,
+      flaps: null,
+      gear: { retractable: false, dCD: 0 },
+      spoiler: { dCD: 0.06, liftFactorAir: 0.88, liftFactorGround: 0.5, brakeGround: 1.5 },
+      thrust: { type: 'none' },
+      roll: { maxRate: deg(45), tau: 0.35, bankCmd: deg(55), bankGain: 1.6 },
+      // trimCL: 手を離したときに保つ速度を決める揚力係数（最良滑空 CL = √(CD0/k) ≈ 0.745 → 約 105 km/h）、speedHold: その速度へ寄せる強さ
+      pitch: { maxRate: deg(25), tauAlpha: 0.4, tauRate: 0.15, alphaMaxCmd: deg(15), alphaMinCmd: deg(-6), turnComp: 1.0, trimCL: 0.745, speedHold: 1.2 },
+      yaw: { betaMax: deg(8), tauBeta: 0.8 },
+      qRef: 0.5 * 1.225 * 25 * 25,
+      gLimit: null,
+      fbw: null,
+      stallRollKick: deg(20),
+      ground: { gearHeight: 0.7, rotateSpeed: 20, rotateRate: deg(5), tailStrike: deg(10), maxSink: 3.0, maxBank: deg(8), steerRate: deg(10), brake: 2.5 },
+      bodyRadius: 0.8,
+    },
+  },
+
   heli: {
     id: 'heli',
     name: 'ヘリコプター HR-3',
     short: 'ヘリ',
     desc: 'ホバリング自在。スロットルがコレクティブ、傾きがサイクリック。',
+    category: 'rotor',
     stats: { speed: 2, agility: 3, difficulty: 3 },
     model: 'heli',
     hud: 'heli',
     groundStart: true,
     buttons: [
-      { id: 'rudderL', label: '◀ テール', type: 'hold' },
-      { id: 'rudderR', label: 'テール ▶', type: 'hold' },
+      { id: 'rudderL', label: '◀ テール', type: 'hold', desc: 'テールロータで機首を左へ回す（その場で向きを変える）' },
+      { id: 'rudderR', label: 'テール ▶', type: 'hold', desc: 'テールロータで機首を右へ回す' },
     ],
+    weapon: { name: '機銃', rate: 15, speed: 800, damage: 10, ammo: 800, spread: 0.005 },
+    guide: {
+      tilt: '傾けた方向に機体が傾いて進む（サイクリック）。手前で減速・後退、奥で前進、左右で横へ。',
+      throttle: 'コレクティブ（ローターの推力）。約 63% でホバリング、上げると上昇、下げると降下。',
+      tips: ['地面の近くは地面効果で浮きやすい。', '前進速度が出ると効率が上がる（転移揚力、HUD に ETL）。'],
+    },
     sound: { type: 'heli', baseFreq: 60, maxFreq: 110 },
     camera: { cockpit: [0, 0.4, -1.6], chaseDist: 20, chaseHeight: 6, fovBase: 70 },
     spawnAir: { agl: 120, speed: 0 },
@@ -170,16 +250,142 @@ export const VEHICLES = {
     },
   },
 
+  drone: {
+    id: 'drone',
+    name: 'FPV ドローン Q4',
+    short: 'ドローン',
+    desc: '機敏なクアッドコプター。一人称視点で建物の間をすり抜ける。',
+    category: 'rotor',
+    stats: { speed: 3, agility: 5, difficulty: 3 },
+    model: 'heli',
+    hud: 'heli',
+    groundStart: true,
+    buttons: [
+      { id: 'rudderL', label: '◀ ヨー', type: 'hold', desc: '機首を左へ回す' },
+      { id: 'rudderR', label: 'ヨー ▶', type: 'hold', desc: '機首を右へ回す' },
+    ],
+    weapon: { name: 'ペイント弾', rate: 8, speed: 300, damage: 10, ammo: 400, spread: 0.006 },
+    guide: {
+      tilt: '傾けた方向に機体が大きく傾いて進む（最大 50°）。機敏なので小さく傾けるのがコツ。',
+      throttle: '4 つのプロペラの推力。約 33% でホバリング。',
+      tips: ['既定の視点は後方。「視点」でコックピット（FPV）にするとレース気分。', 'バッテリーは約 10 分（フル推力時）。'],
+    },
+    sound: { type: 'drone', baseFreq: 180, maxFreq: 420 },
+    camera: { cockpit: [0, 0.06, -0.12], chaseDist: 3.2, chaseHeight: 0.9, fovBase: 82 },
+    spawnAir: { agl: 30, speed: 0 },
+    approach: { dist: 300, agl: 40, speed: 10 },
+    ringRadius: 6, ringSpacingTime: 7,
+    p: {
+      mass: 1.2,
+      thrustMax: 1.2 * 9.80665 * 3.0,
+      rotorRadius: 0.13,
+      hubHeight: 0.15,
+      cgHeight: 0.08,
+      inflowDamping: 0.06,
+      etl: { gain: 0, v0: 4, v1: 13 },
+      dragArea: 0.03, dragAreaVertical: 0.06,
+      att: { maxPitch: deg(50), maxRoll: deg(50), tau: 0.12 },
+      yaw: { maxRate: deg(180), tau: 0.1, weathervane: 0 },
+      battery: { burnTime: 600 },
+      landing: { maxSink: 3.0, maxSpeed: 5, maxTilt: deg(30) },
+      bodyRadius: 0.2,
+    },
+  },
+
+  flycar: {
+    id: 'flycar',
+    name: '空飛ぶスポーツカー VX',
+    short: '空飛ぶ車',
+    desc: '道を走り、ボタン一つで飛び立つ電動スポーツカー。',
+    category: 'car',
+    stats: { speed: 4, agility: 3, difficulty: 2 },
+    model: 'flycar',
+    hud: 'car',
+    groundStart: true,
+    groundStartAnywhere: true,
+    buttons: [
+      { id: 'carMode', label: '飛行 ⇄ 走行', type: 'once', desc: '走行モードと飛行モードを切り替える。飛行 → 走行は着地しているときだけ' },
+      { id: 'rudderL', label: '◀ ヨー', type: 'hold', desc: '飛行中、機首を左へ回す' },
+      { id: 'rudderR', label: 'ヨー ▶', type: 'hold', desc: '飛行中、機首を右へ回す' },
+    ],
+    weapon: { name: 'パルス砲', rate: 10, speed: 1200, damage: 12, ammo: 500, spread: 0.003 },
+    guide: {
+      tilt: '走行中: 左右でハンドル、手前でブレーキ（止まってから 1 秒以上手前に傾け続けるとバック）。飛行中: 傾けた方向に車体が傾いて進む（ドローンと同じ）。',
+      throttle: '走行中はアクセル、飛行中は 4 つのファンの推力（約 45% でホバリング）。',
+      tips: ['走りながら「飛行 ⇄ 走行」を押して推力を上げると離陸。', '着地してから「飛行 ⇄ 走行」で走行に戻る。', 'ヨーのボタンは飛行中だけ表示されます（走行中はハンドルで曲がる）。', 'ビルの屋上にも着地して走れます。'],
+    },
+    sound: { type: 'ev', baseFreq: 90, maxFreq: 600 },
+    camera: { cockpit: [-0.35, 0.55, 0.1], chaseDist: 9, chaseHeight: 2.6, fovBase: 72 },
+    spawnAir: { agl: 60, speed: 0 },
+    approach: { dist: 600, agl: 80, speed: 20 },
+    ringRadius: 14, ringSpacingTime: 7,
+    p: {
+      mass: 1600,
+      drive: { force: 9500, power: 450000, CdA: 0.6, rolling: 0.012, brake: 8.5, maxSteer: deg(32), wheelBase: 2.65, gripLat: 9.0, reverse: 2500 },
+      fly: { thrustMax: 1600 * 9.80665 * 2.2, dragArea: 1.25, dragAreaVertical: 4.0, inflowDamping: 0.03, att: { maxPitch: deg(28), maxRoll: deg(30), tau: 0.35 }, yaw: { maxRate: deg(60), tau: 0.3, weathervane: 0.8 } },
+      battery: { burnTime: 480 },
+      cgHeight: 0.55,
+      landing: { maxSink: 3.5, maxSpeed: 60, maxTilt: deg(20) }, // 車輪があるので速度があっても着地できる
+      bodyRadius: 1.2,
+    },
+  },
+
+  balloon: {
+    id: 'balloon',
+    name: '熱気球',
+    short: '熱気球',
+    desc: 'バーナーで高度を変え、高さごとに違う風に乗って進む。',
+    category: 'glider',
+    stats: { speed: 1, agility: 1, difficulty: 2 },
+    model: 'balloon',
+    hud: 'balloon',
+    groundStart: false,
+    buttons: [
+      { id: 'burner', label: 'バーナー', type: 'hold', desc: '押している間バーナー全開。球皮の空気が温まって上昇する（反応は数秒遅れる）' },
+      { id: 'vent', label: '排気弁', type: 'hold', desc: '押している間、上の弁から熱い空気を逃がして早く降下する' },
+    ],
+    weapon: null,
+    guide: {
+      tilt: '傾きでは操縦しません。',
+      throttle: 'バーナーの燃焼量。約 16% で高度を保つ。',
+      tips: ['向きは操縦できません。高さによって風向きが違うので、行きたい方向の風が吹く高さへ上下して進む（HUD の風の矢印）。', '反応が遅いので早めにバーナーを切る・入れる。'],
+    },
+    sound: { type: 'balloon', baseFreq: 0, maxFreq: 0 },
+    camera: { cockpit: [0, 1.2, 0], chaseDist: 45, chaseHeight: 14, fovBase: 70 },
+    spawnAir: { agl: 150, speed: 0 },
+    approach: { dist: 2200, agl: 300 },
+    ringRadius: 40, ringSpacingTime: 40,
+    p: {
+      mass: 450,           // 球皮・ゴンドラ・乗員・燃料
+      envelopeVolume: 2800,
+      heatLoss: 0.004,     // [1/s] 外気への放熱
+      burnerHeat: 1.1,     // [K/s] バーナー全開での昇温
+      ventRate: 0.03,      // [1/s] 排気弁を開けたときの冷却
+      CdA: 120,            // 上下方向の抵抗
+      windCoupling: 0.08,  // [1/s] 水平速度が風に追従する速さ
+      basketHeight: 0.6,
+      landing: { maxSink: 3.0, maxSpeed: 8 },
+      bodyRadius: 9,
+    },
+  },
+
   paraglider: {
     id: 'paraglider',
     name: 'パラグライダー',
     short: 'パラグライダー',
     desc: '推力なし。サーマルと斜面上昇風で高度を稼ぐ。',
+    category: 'glider',
     stats: { speed: 1, agility: 2, difficulty: 2 },
     model: 'paraglider',
     hud: 'glide',
     groundStart: false,
     buttons: [],
+    weapon: null,
+    guide: {
+      tilt: '左右に傾けると片側ブレーク（その方向へ旋回）、手前に傾けると両ブレーク（減速）、奥へ倒すとスピードバー（加速）。',
+      throttle: '推力はありません。',
+      tips: ['風上側の斜面（斜面上昇風）や積雲の下（サーマル）で上昇し、バリオ音が鳴る。', '着地は風に向かって。地面すれすれで手前に引いてフレア。'],
+    },
     sound: { type: 'none' },
     camera: { cockpit: [0, 0.2, -0.3], chaseDist: 18, chaseHeight: 4, fovBase: 72 },
     spawnAir: { agl: 160, speed: 10.5, ridge: true },
@@ -200,14 +406,21 @@ export const VEHICLES = {
     name: 'ジェットスーツ',
     short: 'ジェットスーツ',
     desc: '腕のジェットで飛ぶ。傾けると推力の向きが変わる。燃料に注意。',
+    category: 'human',
     stats: { speed: 2, agility: 4, difficulty: 4 },
     model: 'jetsuit',
     hud: 'heli',
     groundStart: true,
     buttons: [
-      { id: 'rudderL', label: '◀ ヨー', type: 'hold' },
-      { id: 'rudderR', label: 'ヨー ▶', type: 'hold' },
+      { id: 'rudderL', label: '◀ ヨー', type: 'hold', desc: '体の向きを左へ回す' },
+      { id: 'rudderR', label: 'ヨー ▶', type: 'hold', desc: '体の向きを右へ回す' },
     ],
+    weapon: { name: 'ブラスター', rate: 8, speed: 600, damage: 12, ammo: 300, spread: 0.006 },
+    guide: {
+      tilt: '傾けた方向に体が傾き、推力の向きが変わる。奥へ倒すと前進、手前で減速、左右で横移動しながら旋回。',
+      throttle: '推力。約 60% でホバリング。',
+      tips: ['右上の燃料ゲージに注意。切れると落ちる。'],
+    },
     sound: { type: 'jetsuit', baseFreq: 150, maxFreq: 500 },
     camera: { cockpit: [0, 0.75, -0.25], chaseDist: 9, chaseHeight: 2.5, fovBase: 74 },
     spawnAir: { agl: 80, speed: 0 },
@@ -231,12 +444,19 @@ export const VEHICLES = {
     name: 'ウイングスーツ',
     short: 'ウイングスーツ',
     desc: '高速で滑空。速さと滑空比のトレードオフ。最後はパラシュートで。',
+    category: 'human',
     stats: { speed: 3, agility: 4, difficulty: 4 },
     model: 'human',
     startPhase: 'wingsuit',
     hud: 'glide',
     groundStart: false,
-    buttons: [{ id: 'deploy', label: 'パラシュート', type: 'once' }],
+    buttons: [{ id: 'deploy', label: 'パラシュート', type: 'once', desc: 'パラシュートを開く（約 2.5 秒で開く）。開かずに地面に着くと墜落' }],
+    weapon: null,
+    guide: {
+      tilt: '左右で旋回。手前に引くと減速して滑空比が良くなり、奥へ倒すと速くなる代わりに沈みが増える。',
+      throttle: '推力はありません。',
+      tips: ['対地 800 m 前後でパラシュートを開く。', 'キャノピーでは左右で旋回、地面すれすれで手前に引いてフレア。風に向かって着地。'],
+    },
     sound: { type: 'none' },
     camera: { cockpit: [0, 0.3, -0.4], chaseDist: 10, chaseHeight: 2.5, fovBase: 75 },
     spawnAir: { agl: 1800, speed: 32 },
@@ -259,12 +479,19 @@ export const VEHICLES = {
     name: 'スカイダイビング',
     short: 'スカイダイブ',
     desc: '自由落下→トラッキング→パラシュート展開→キャノピーで精密着地。',
+    category: 'human',
     stats: { speed: 3, agility: 2, difficulty: 2 },
     model: 'human',
     startPhase: 'freefall',
     hud: 'glide',
     groundStart: false,
-    buttons: [{ id: 'deploy', label: 'パラシュート', type: 'once' }],
+    buttons: [{ id: 'deploy', label: 'パラシュート', type: 'once', desc: 'パラシュートを開く（約 2.5 秒で開く）。低すぎると自動展開装置が作動' }],
+    weapon: null,
+    guide: {
+      tilt: '自由落下中: 左右で向きを変え、奥へ倒すとトラッキング（水平に移動）、手前でブレーキ。キャノピー: 左右で旋回、手前でフレア。',
+      throttle: '推力はありません。',
+      tips: ['目標の同心円の真上を目指してトラッキング。', '地面すれすれで手前に引いてフレア。目標に近いほど高得点。'],
+    },
     sound: { type: 'none' },
     camera: { cockpit: [0, 0.3, -0.4], chaseDist: 9, chaseHeight: 3.5, fovBase: 75 },
     spawnAir: { agl: 2500, speed: 35 },
@@ -283,7 +510,7 @@ export const VEHICLES = {
   },
 };
 
-export const VEHICLE_ORDER = ['prop', 'airliner', 'fighter', 'heli', 'paraglider', 'jetsuit', 'wingsuit', 'skydive'];
+export const VEHICLE_ORDER = ['prop', 'airliner', 'fighter', 'sailplane', 'heli', 'drone', 'flycar', 'balloon', 'paraglider', 'jetsuit', 'wingsuit', 'skydive'];
 
 export function getVehicle(id) {
   const v = VEHICLES[id];

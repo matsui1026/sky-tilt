@@ -134,7 +134,9 @@ export function stepFixedWing(def, s, ctl, env, dt) {
   const Y = -qbar * P.S * P.CYb * beta;
   const sigma = rho / 1.225;
   let T;
-  if (P.thrust.type === 'prop') {
+  if (P.thrust.type === 'none') {
+    T = 0;
+  } else if (P.thrust.type === 'prop') {
     T = s.throttle * Math.min(P.thrust.static, P.thrust.power / Math.max(V, 1)) * sigma;
   } else {
     T = (s.throttle * P.thrust.mil + (s.ab ? P.thrust.ab - P.thrust.mil : 0)) * Math.pow(sigma, 0.75);
@@ -205,10 +207,18 @@ export function stepFixedWing(def, s, ctl, env, dt) {
   const turnN = lerp(1 / Math.cos(Math.min(absBank, 60 * DEG)), 1, smoothstep(60 * DEG, 80 * DEG, absBank));
   const nTrim = Math.cos(gamma) * (1 + Pp.turnComp * (turnN - 1));
   const qS = Math.max(qbar * P.S, 1);
-  const alphaTrim = clamp((nTrim * m * G0 / qS - lc.cl0) / P.CLa, Pp.alphaMinCmd, Math.min(lc.aS * 0.85, Pp.alphaMaxCmd));
+  // 手を離したとき: 1G で経路を保つ迎角。trimCL がある機体（グライダー）はさらに最良滑空速度へ寄せる
+  let nT = nTrim;
+  if (Pp.trimCL) {
+    // 最良滑空速度（その高度の真対気速度）を保つよう荷重をわずかに増減（速いと引き起こし、遅いと下げる）
+    const vTrim = Math.sqrt((2 * m * G0) / (rho * P.S * Pp.trimCL));
+    nT = nTrim * (1 + Pp.speedHold * clamp((V - vTrim) / vTrim, -0.5, 0.5));
+  }
+  const alphaTrim = clamp((nT * m * G0 / qS - lc.cl0) / P.CLa, Pp.alphaMinCmd, Math.min(lc.aS * 0.85, Pp.alphaMaxCmd));
+  const alphaTrimD = alphaTrim;
   let alphaCmd = ctl.pitch >= 0
-    ? alphaTrim + ctl.pitch * (Pp.alphaMaxCmd - alphaTrim)
-    : alphaTrim + ctl.pitch * (alphaTrim - Pp.alphaMinCmd);
+    ? alphaTrimD + ctl.pitch * (Pp.alphaMaxCmd - alphaTrimD)
+    : alphaTrimD + ctl.pitch * (alphaTrimD - Pp.alphaMinCmd);
   if (P.gLimit) {
     const aMaxG = alphaForLoad(P, s, P.gLimit.pos, qS, mach);
     const aMinG = alphaForLoad(P, s, P.gLimit.neg, qS, mach);

@@ -10,6 +10,8 @@ const SCENARIOS = [
   { vehicle: 'airliner', opts: { mode: 'rings', time: 'night', weather: 'cloudy' }, camera: 'chase' },
   { vehicle: 'prop', opts: { mode: 'free', time: 'noon', weather: 'clear' }, camera: 'external' },
   { vehicle: 'heli', opts: { mode: 'landing', time: 'evening', weather: 'windy' }, camera: 'cockpit' },
+  { vehicle: 'fighter', opts: { mode: 'combat', time: 'noon', weather: 'cloudy' }, camera: 'chase' },
+  { vehicle: 'balloon', opts: { mode: 'free', time: 'morning', weather: 'clear' }, camera: 'external' },
 ];
 
 test('全ロケーションの描画予算', async ({ page }) => {

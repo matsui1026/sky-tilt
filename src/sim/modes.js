@@ -3,8 +3,32 @@ import { DEG, clamp, mulberry32, hashString, vsub, vdot, vlen, vnorm, vadd, vsca
 import { fieldLocal } from './terrainGen.js';
 import { stallSpeed } from './vehicles/fixedwing.js';
 
-export const CRUISE = { prop: 50, airliner: 125, fighter: 200, heli: 35, paraglider: 10.5, jetsuit: 28, wingsuit: 31, skydive: 0 };
+export const CRUISE = { prop: 50, airliner: 125, fighter: 200, sailplane: 29, heli: 35, drone: 18, flycar: 45, balloon: 0, paraglider: 10.5, jetsuit: 28, wingsuit: 31, skydive: 0 };
 export const RING_PENALTY = 5;
+
+/** 機体ごとに遊べるモード */
+export function modesFor(def) {
+  if (def.model === 'balloon') return ['free', 'landing'];
+  return ['free', 'rings', 'combat', 'landing'];
+}
+
+/**
+ * 次のリングへの接近の予測（HUD の距離感の手がかり）。
+ * 戻り値: dist（中心まで）, eta（今の速度で通過面に届くまでの秒数, 届かなければ null）,
+ *         miss（そのまま進んだときに通過面で中心からどれだけずれるか）, willPass, side（ずれの向き: 機体から見た右/上）
+ */
+export function ringApproach(ring, pos, vel) {
+  const rel = vsub(ring.pos, pos);
+  const dist = vlen(rel);
+  const vn = vdot(vel, ring.normal);
+  const dn = vdot(rel, ring.normal); // 通過面までの距離（法線方向）
+  if (vn <= 0.5 || dn <= 0) return { dist, eta: null, miss: null, willPass: false };
+  const t = dn / vn;
+  const hit = vadd(pos, vscale(vel, t));
+  const off = vsub(hit, ring.pos);
+  const miss = vlen(off);
+  return { dist, eta: t, miss, willPass: miss <= ring.radius * 0.9, offset: off };
+}
 
 /** start: { pos, heading(rad) } */
 export function createRingCourse(world, def, start) {
@@ -84,7 +108,8 @@ export class RingTracker {
         this.passed++;
         this.index++;
         emit('ring', { index: this.index - 1, total: this.rings.length });
-      } else if (r < ring.radius * 4) {
+      } else if (r < Math.max(ring.radius * 12, 400)) {
+        // 輪の外を通り過ぎた（次の輪へ進む）。遠く離れた所で通過面を横切っただけなら数えない
         this.missed++;
         this.index++;
         emit('ringMiss', { index: this.index - 1, total: this.rings.length });
@@ -104,6 +129,8 @@ const GRADE_TABLE = {
   jetsuit: [0.6, 1.2, 2.0],
   human: [1.5, 2.5, 4.0],
   paraglider: [0.8, 1.6, 2.6],
+  balloon: [0.5, 1.0, 2.0],
+  flycar: [0.8, 1.6, 2.6],
 };
 
 /** 着陸評価（接地速度と降下率、精度） */

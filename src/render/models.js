@@ -384,14 +384,197 @@ function buildHuman(def) {
   };
 }
 
+// ---------------- グライダー ----------------
+function buildSailplane() {
+  const W = 0xf7f7f7, R = 0x2f7de0, D = 0x23323f, K = 0x333333;
+  const wingR = sweptWing(8.5, 1.1, 0.45, 0.12, 2, 3);
+  const parts = [
+    P(cylZ(0.42, 0.5, 2.6, 12), W, { pos: [0, 0, -1.6] }),
+    P(sphere(0.42, 12, 8), W, { pos: [0, 0, -2.9], scale: [1, 1, 1.6] }),
+    P(cylZ(0.5, 0.1, 5.2, 10), W, { pos: [0, 0.05, 2.3] }),
+    P(sphere(0.4, 12, 8), D, { pos: [0, 0.3, -2.1], scale: [0.85, 0.6, 2.0] }),
+    P(wingR, W, { pos: [0.3, 0.35, -0.9] }),
+    P(mirrorX(wingR), W, { pos: [-0.3, 0.35, -0.9] }),
+    P(box(1.0, 0.13, 0.32), R, { pos: [8.5, 0.82, -0.75] }),
+    P(box(1.0, 0.13, 0.32), R, { pos: [-8.5, 0.82, -0.75] }),
+    P(box(0.08, 1.3, 0.9), R, { pos: [0, 0.7, 4.6], rot: [-0.3, 0, 0] }),
+    P(box(2.6, 0.06, 0.55), W, { pos: [0, 1.35, 4.85] }),
+    P(cylX(0.22, 0.12), K, { pos: [0, -0.5, -0.9] }),
+  ];
+  const root = new THREE.Group();
+  root.add(merged(parts));
+  return { root, update() {} };
+}
+
+// ---------------- ドローン ----------------
+function buildDrone() {
+  const K = 0x22262b, O = 0xff6a1a, G = 0x7a8590;
+  const parts = [
+    P(box(0.14, 0.05, 0.22), K, { pos: [0, 0, 0] }),
+    P(box(0.09, 0.04, 0.06), O, { pos: [0, 0.035, -0.09] }),
+    P(box(0.04, 0.03, 0.03), 0x111111, { pos: [0, 0.02, -0.125] }),
+  ];
+  const arms = [[0.11, -0.11], [-0.11, -0.11], [0.11, 0.11], [-0.11, 0.11]];
+  for (const [x, z] of arms) {
+    parts.push(P(box(0.025, 0.015, 0.17), G, { pos: [x / 2, 0, z / 2], rot: [0, Math.atan2(x, z), 0] }));
+    parts.push(P(cylZ(0.022, 0.022, 0.03, 8).rotateX(Math.PI / 2), K, { pos: [x, 0.02, z] }));
+  }
+  const root = new THREE.Group();
+  root.add(merged(parts));
+  const props = [];
+  const discMat = new THREE.MeshBasicMaterial({ color: 0x999999, transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide });
+  for (const [x, z] of arms) {
+    const d = new THREE.Mesh(new THREE.CircleGeometry(0.065, 16).rotateX(-Math.PI / 2), discMat);
+    d.position.set(x, 0.04, z);
+    root.add(d);
+    props.push(d);
+  }
+  return {
+    root,
+    update(vs) {
+      discMat.opacity = 0.08 + 0.3 * (vs.rotorRpm ?? 1) * (0.4 + (vs.collective ?? 0.5));
+    },
+  };
+}
+
+// ---------------- 空飛ぶスポーツカー（オリジナルデザイン） ----------------
+function buildFlycar() {
+  const R = 0xc8102e, D = 0x1a1f26, G = 0x8a929c, L = 0xfff2c0, T = 0xff3030;
+  const parts = [
+    P(box(1.9, 0.42, 4.3), R, { pos: [0, 0.02, 0] }),
+    P(box(1.86, 0.16, 1.5), R, { pos: [0, 0.26, -1.45], rot: [0.16, 0, 0] }),
+    P(sphere(1, 16, 10), 0x2a3a4a, { pos: [0, 0.36, 0.25], scale: [0.72, 0.3, 1.0] }),
+    P(box(1.8, 0.05, 0.9), D, { pos: [0, 0.3, -0.75], rot: [0.35, 0, 0] }),
+    P(box(1.92, 0.12, 1.2), R, { pos: [0, 0.38, 1.5], rot: [-0.1, 0, 0] }),
+    P(box(1.6, 0.06, 0.3), D, { pos: [0, 0.48, 2.1] }),
+    P(box(0.5, 0.08, 0.06), L, { pos: [0.62, 0.12, -2.16] }),
+    P(box(0.5, 0.08, 0.06), L, { pos: [-0.62, 0.12, -2.16] }),
+    P(box(1.6, 0.06, 0.05), T, { pos: [0, 0.2, 2.16] }),
+  ];
+  // ホイール
+  for (const [x, z] of [[0.92, -1.35], [-0.92, -1.35], [0.92, 1.35], [-0.92, 1.35]]) {
+    parts.push(P(cylX(0.34, 0.26, 14), 0x111111, { pos: [x, -0.21, z] }));
+    parts.push(P(cylX(0.2, 0.27, 10), G, { pos: [x, -0.21, z] }));
+  }
+  const root = new THREE.Group();
+  root.add(merged(parts));
+  // ダクトファン（飛行モードで車体の外へ展開）
+  const fans = [];
+  const ductGeo = merged([P(new THREE.TorusGeometry(0.42, 0.07, 6, 18).rotateX(Math.PI / 2), D), P(box(0.8, 0.03, 0.05), G)]).geometry;
+  const glowMat = new THREE.MeshBasicMaterial({ color: 0x6fd8ff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+  for (const [x, z] of [[1.0, -1.35], [-1.0, -1.35], [1.0, 1.35], [-1.0, 1.35]]) {
+    const g = new THREE.Group();
+    const duct = new THREE.Mesh(ductGeo, MAT);
+    const glow = new THREE.Mesh(new THREE.CircleGeometry(0.4, 18).rotateX(Math.PI / 2), glowMat);
+    glow.position.y = -0.05;
+    g.add(duct, glow);
+    g.userData = { x, z };
+    root.add(g);
+    fans.push(g);
+  }
+  return {
+    root,
+    update(vs, dt, t) {
+      const k = vs.fanRpm ?? 0;
+      for (const f of fans) {
+        const { x, z } = f.userData;
+        f.position.set(x * (0.75 + 0.55 * k), 0.15 + 0.1 * k, z);
+        f.rotation.z = (x > 0 ? -1 : 1) * 0.3 * k;
+        f.visible = k > 0.05;
+        f.children[1].rotation.y += dt * 40;
+      }
+      glowMat.opacity = k * (0.15 + 0.5 * (vs.throttle ?? 0)) * (1 + 0.1 * Math.sin(t * 30));
+    },
+  };
+}
+
+// ---------------- 熱気球 ----------------
+function buildBalloon() {
+  const root = new THREE.Group();
+  // 球皮: 縦縞のゴア（頂点色）
+  const geo = new THREE.SphereGeometry(8.5, 24, 16);
+  const pos = geo.attributes.position;
+  const cols = new Float32Array(pos.count * 3);
+  const palette = [new THREE.Color(0xff4d2e), new THREE.Color(0xffd23a), new THREE.Color(0x2fa3ff), new THREE.Color(0xffffff)];
+  for (let i = 0; i < pos.count; i++) {
+    let y = pos.getY(i);
+    // 下すぼまりの形
+    const k = y < 0 ? 0.55 + 0.45 * (1 + y / 8.5) : 1;
+    pos.setX(i, pos.getX(i) * k);
+    pos.setZ(i, pos.getZ(i) * k);
+    if (y < 0) pos.setY(i, y * 1.25);
+    const ang = Math.atan2(pos.getZ(i), pos.getX(i));
+    const c = palette[Math.floor(((ang + Math.PI) / (2 * Math.PI)) * 12) % palette.length];
+    cols[i * 3] = c.r; cols[i * 3 + 1] = c.g; cols[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+  geo.computeVertexNormals();
+  const env = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+  env.position.y = 16.5;
+  root.add(env);
+  const parts = [
+    P(box(1.3, 1.0, 1.3), 0x8a5a2b, { pos: [0, 0, 0] }),
+    P(box(1.36, 0.12, 1.36), 0x5a3a1b, { pos: [0, 0.5, 0] }),
+    P(cylZ(0.12, 0.12, 0.5, 8).rotateX(Math.PI / 2), 0x666666, { pos: [0, 1.6, 0] }),
+  ];
+  for (const [x, z] of [[0.6, 0.6], [-0.6, 0.6], [0.6, -0.6], [-0.6, -0.6]]) parts.push(P(box(0.03, 6.2, 0.03), 0x333333, { pos: [x * 2.3, 3.6, z * 2.3], rot: [z * -0.38, 0, x * 0.38] }));
+  root.add(merged(parts));
+  const flameMat = new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.35, 2.2, 10, 1, true).translate(0, 1.1, 0), flameMat);
+  flame.position.y = 1.8;
+  root.add(flame);
+  return {
+    root,
+    update(vs, dt, t) {
+      const b = vs.burner ?? 0;
+      flame.visible = b > 0.05;
+      flame.scale.set(1, 0.4 + b * 1.4 * (1 + 0.15 * Math.sin(t * 37)), 1);
+    },
+  };
+}
+
 export function buildVehicleModel(def) {
   switch (def.id) {
     case 'prop': return buildProp();
     case 'airliner': return buildAirliner();
     case 'fighter': return buildFighter();
+    case 'sailplane': return buildSailplane();
     case 'heli': return buildHeli();
+    case 'drone': return buildDrone();
+    case 'flycar': return buildFlycar();
+    case 'balloon': return buildBalloon();
     case 'paraglider': return buildParaglider();
     case 'jetsuit': return buildJetsuit();
     default: return buildHuman(def);
   }
+}
+
+// ---------------- 敵機・的（射撃モード） ----------------
+export function buildEnemyModel(type) {
+  if (type === 'drone') {
+    const parts = [P(box(1.4, 0.4, 1.4), 0x3a3f46), P(sphere(0.45, 10, 8), 0xff3030, { pos: [0, -0.3, -0.5] })];
+    for (const [x, z] of [[1.1, 1.1], [-1.1, 1.1], [1.1, -1.1], [-1.1, -1.1]]) {
+      parts.push(P(box(0.12, 0.1, 1.6), 0x2a2e33, { pos: [x / 2, 0, z / 2], rot: [0, Math.atan2(x, z), 0] }));
+      parts.push(P(cylZ(0.6, 0.6, 0.06, 12).rotateX(Math.PI / 2), 0x555555, { pos: [x, 0.25, z] }));
+    }
+    const m = merged(parts);
+    m.scale.setScalar(1.6);
+    const g = new THREE.Group();
+    g.add(m);
+    return g;
+  }
+  // 敵の飛行機: 黒と赤の無人機（オリジナル）
+  const D = 0x2b2f36, Rr = 0xd23030;
+  const wingR = deltaWing([[0.4, -1.2], [4.2, 1.6], [4.2, 2.3], [0.4, 2.6]], 0.18);
+  const parts = [
+    P(cylZ(0.05, 0.8, 4, 12), D, { pos: [0, 0, -4] }),
+    P(cylZ(0.8, 0.6, 6, 12), D, { pos: [0, 0, 1] }),
+    P(wingR, D, {}),
+    P(mirrorX(wingR), D, {}),
+    P(box(0.12, 1.6, 1.4), Rr, { pos: [0, 0.9, 3.4], rot: [-0.4, 0, 0] }),
+    P(box(1.2, 0.2, 0.6), Rr, { pos: [0, 0, -2.2] }),
+  ];
+  const g = new THREE.Group();
+  g.add(merged(parts));
+  return g;
 }

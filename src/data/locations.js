@@ -98,9 +98,10 @@ export const WEATHER_ORDER = ['clear', 'cloudy', 'windy'];
 export const MODES = {
   free: { id: 'free', name: 'フリーフライト' },
   rings: { id: 'rings', name: 'リングコース' },
+  combat: { id: 'combat', name: '射撃' },
   landing: { id: 'landing', name: '着陸チャレンジ' },
 };
-export const MODE_ORDER = ['free', 'rings', 'landing'];
+export const MODE_ORDER = ['free', 'rings', 'combat', 'landing'];
 
 export function getLocation(id) {
   const l = LOCATIONS[id];

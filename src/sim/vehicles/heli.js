@@ -30,6 +30,7 @@ export function createHeli(def, spawn) {
     onGround: !!spawn.onGround,
     touchdown: null, landedEmitted: false, airTime: spawn.onGround ? 0 : 99,
     g: 1, airspeed: sp, kGE: 1, kETL: 1, thrust: 0, rotorRpm: spawn.onGround ? 0.0 : 1,
+    fuel: def.p.battery ? 1 : undefined,
   };
 }
 
@@ -42,7 +43,14 @@ export function stepHeli(def, s, ctl, env, dt) {
   const P = def.p;
   const world = env.world;
   const m = P.mass;
-  s.collective = approach(s.collective, clamp(ctl.throttle, 0, 1), 0.12, dt);
+  // バッテリー（ドローン）: 推力に比例して減り、切れると推力を失う
+  const bat = P.battery;
+  const cmd = bat && s.fuel <= 0 ? 0 : clamp(ctl.throttle, 0, 1);
+  s.collective = approach(s.collective, cmd, bat ? 0.05 : 0.12, dt);
+  if (bat) {
+    s.fuel = Math.max(0, s.fuel - (s.collective / bat.burnTime) * dt);
+    if (s.fuel <= 0 && !s.fuelOut) { s.fuelOut = true; env.emit('fuelout', {}); }
+  }
   // ローター回転（起動演出用）
   s.rotorRpm = approach(s.rotorRpm, s.onGround && s.collective < 0.05 ? 0.6 : 1, 2.0, dt);
 

@@ -31,7 +31,7 @@ button { font-family: inherit; color: inherit; }
 #safe-probe { position: absolute; visibility: hidden; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
 
 /* ---------- 演出オーバーレイ ---------- */
-.fx { position: absolute; inset: 0; pointer-events: none; opacity: 0; }
+.fx { position: absolute; inset: 0; pointer-events: none; opacity: 0; visibility: hidden; }
 #fx-vignette { background: radial-gradient(ellipse at center, rgba(0,0,0,0) 18%, rgba(0,0,0,0.92) 70%, #000 100%); }
 #fx-red { background: radial-gradient(ellipse at center, rgba(160,0,0,0.25) 20%, rgba(140,0,0,0.85) 100%); }
 #fx-cloud { background: radial-gradient(ellipse at center, rgba(255,255,255,0.85), rgba(235,240,248,0.98)); }
@@ -46,7 +46,6 @@ button { font-family: inherit; color: inherit; }
   background: var(--btn); border: 1.5px solid var(--btn-border);
   color: #fff; font-size: 14px; font-weight: 700; letter-spacing: 0.02em;
   display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px; line-height: 1.15;
-  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
   transition: transform 0.06s, background 0.1s;
 }
 .hbtn.pressed { transform: scale(0.92); background: rgba(58, 255, 176, 0.45); border-color: var(--accent); }
@@ -66,9 +65,19 @@ button { font-family: inherit; color: inherit; }
 #stick-knob { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%;
   background: rgba(255,255,255,0.45); border: 2px solid rgba(255,255,255,0.8); pointer-events: none; }
 #stick-label { position: absolute; bottom: -2px; left: 0; right: 0; text-align: center; font-size: 10px; color: var(--muted); }
-#throttle { position: absolute; right: var(--pad-r); bottom: var(--pad-b); width: 72px; height: min(230px, calc(100vh - 140px)); border-radius: 16px;
+#weapon-zone { position: absolute; right: calc(var(--pad-r) + 84px); bottom: var(--pad-b); display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+#weapon-zone.no-throttle { right: var(--pad-r); }
+.fire-btn { width: 86px; height: 86px; border-radius: 50%; font-size: 15px; background: rgba(200, 40, 30, 0.5); border-color: rgba(255, 140, 120, 0.8); }
+.fire-btn.pressed { background: rgba(255, 70, 50, 0.75); border-color: #ffd0c0; }
+#btn-missile { min-width: 86px; font-size: 13px; }
+#throttle { position: absolute; right: var(--pad-r); bottom: var(--pad-b); width: 72px; height: min(200px, calc(100vh - 190px)); border-radius: 16px;
   background: var(--btn); border: 1.5px solid var(--btn-border); overflow: hidden; }
 #throttle.pressed { border-color: var(--accent); }
+/* 左利き配置: スティック・機体ボタンを右下、スロットル・射撃を左下へ */
+body.lefty #left-zone { left: auto; right: var(--pad-r); align-items: flex-end; }
+body.lefty #throttle { right: auto; left: var(--pad-l); }
+body.lefty #weapon-zone { right: auto; left: calc(var(--pad-l) + 84px); align-items: flex-start; }
+body.lefty #weapon-zone.no-throttle { left: var(--pad-l); }
 #throttle-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(to top, rgba(58,255,176,0.55), rgba(58,255,176,0.15)); }
 #throttle-knob { position: absolute; left: 6px; right: 6px; height: 44px; bottom: 0; border-radius: 12px; background: rgba(255,255,255,0.85);
   display: flex; align-items: center; justify-content: center; color: #102030; font-weight: 800; font-size: 13px; pointer-events: none; }
@@ -154,6 +163,38 @@ button { font-family: inherit; color: inherit; }
 .tut .dot.on { background: var(--accent); }
 .tut svg { height: 96px; }
 .crash-title { font-size: 44px; font-weight: 900; color: #ff6a5a; margin: 0; }
+
+.badge { margin-left: 6px; font-size: 10px; padding: 1px 6px; border-radius: 8px; background: rgba(255, 90, 70, 0.35); border: 1px solid rgba(255, 140, 120, 0.6); vertical-align: middle; }
+.muted { color: var(--muted); font-size: 13px; }
+.srow.wide { grid-column: span 2; grid-template-columns: 92px auto 1fr; }
+.seg-ctl button:disabled { opacity: 0.35; }
+
+/* 操作ガイド */
+.bg-guide { background: linear-gradient(160deg, #0f2440, #1b3a5e 60%, #23476e); }
+.guide-body { flex: 1; min-height: 0; display: flex; gap: 12px; }
+.guide-list { flex: 0 0 150px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; touch-action: pan-y; padding-right: 4px; }
+.chip { min-height: 48px; border-radius: 12px; background: rgba(16,28,44,0.7); border: 1.5px solid rgba(255,255,255,0.22); font-size: 14px; font-weight: 700; text-align: left; padding: 0 12px; }
+.chip.sel { border-color: var(--accent); background: rgba(58,255,176,0.2); }
+.guide-content { flex: 1; overflow-y: auto; touch-action: pan-y; background: var(--panel); border: 1px solid var(--panel-border); border-radius: 16px; padding: 12px 18px; font-size: 14px; line-height: 1.55; }
+.guide-content h3 { margin: 2px 0 4px; font-size: 19px; }
+.guide-content h4 { margin: 12px 0 4px; font-size: 14px; color: var(--accent); }
+.guide-content p, .guide-content ul { margin: 2px 0; }
+.guide-content ul { padding-left: 20px; }
+.guide-grid { grid-template-columns: minmax(110px, auto) 1fr; font-size: 13px; gap: 6px 14px; }
+.guide-grid .btnlabel { color: #fff; font-weight: 700; white-space: nowrap; }
+.guide-head { display: flex; gap: 12px; align-items: center; }
+.guide-icon svg { width: 120px; height: 46px; }
+
+/* 2 人プレイ */
+#scr-lobby input[type=text], #scr-lobby textarea { min-height: 48px; border-radius: 12px; border: 1.5px solid rgba(255,255,255,0.3); background: rgba(0,0,0,0.35); color: #fff; font-size: 16px; padding: 6px 10px; font-family: inherit; }
+#mp-name { width: 120px; } #mp-code { width: 110px; letter-spacing: 0.2em; }
+#scr-lobby textarea { flex: 1; font-size: 11px; resize: none; touch-action: auto; user-select: text; -webkit-user-select: text; }
+.lobby-status { font-size: 14px; color: #e6eef8; }
+.room-code { font-size: 40px; font-weight: 900; letter-spacing: 0.25em; color: var(--accent2); }
+.lobby-manual { display: flex; flex-direction: column; gap: 6px; }
+.spinner { width: 34px; height: 34px; border-radius: 50%; border: 4px solid rgba(255,255,255,0.2); border-top-color: var(--accent); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#fx-hit { background: radial-gradient(ellipse at center, rgba(255,0,0,0) 40%, rgba(255,30,20,0.75) 100%); }
 
 /* 縦向き警告 */
 #rotate { position: fixed; inset: 0; z-index: 100; display: none; background: #0b1420; color: #fff; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center; padding: 24px; }

@@ -41,30 +41,107 @@ export function createSpeedLines() {
   };
 }
 
-export function createRings(rings) {
+/** 数字のスプライト用テクスチャ */
+function numberTexture(n) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(0,0,0,0.55)';
+  g.beginPath(); g.arc(64, 64, 58, 0, Math.PI * 2); g.fill();
+  g.lineWidth = 8; g.strokeStyle = '#ffffff'; g.stroke();
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 72px sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(String(n), 64, 68);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/**
+ * リングコースの描画。見やすさと距離感のために:
+ * - 太く光るリング（次のリングは緑で点滅し、膜と外側の光輪つき）
+ * - 番号の札、地面まで下ろした支柱と地面の影（高さと距離の手がかり）
+ * - 次のリング以降をつなぐ案内線
+ */
+export function createRings(rings, world) {
   const group = new THREE.Group();
   group.name = 'rings';
-  const meshes = rings.map((r, i) => {
-    const geo = new THREE.TorusGeometry(r.radius, Math.max(0.6, r.radius * 0.07), 8, 40);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffc23a, transparent: true, opacity: 0.85, fog: false });
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(r.pos.x, r.pos.y, r.pos.z);
-    m.lookAt(r.pos.x + r.normal.x, r.pos.y + r.normal.y, r.pos.z + r.normal.z);
-    m.userData.index = i;
-    group.add(m);
-    return m;
+  const terr = world ? world.terrain : null;
+  const items = rings.map((r, i) => {
+    const g = new THREE.Group();
+    g.position.set(r.pos.x, r.pos.y, r.pos.z);
+    const orient = new THREE.Object3D();
+    orient.lookAt(r.normal.x, r.normal.y, r.normal.z);
+    const tube = Math.max(0.8, r.radius * 0.1);
+    const torus = new THREE.Mesh(new THREE.TorusGeometry(r.radius, tube, 10, 48), new THREE.MeshBasicMaterial({ color: 0xffc23a, transparent: true, opacity: 0.9, fog: false }));
+    torus.quaternion.copy(orient.quaternion);
+    g.add(torus);
+    // 外側の光輪（遠くからでも見える）
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(r.radius, tube * 3.2, 8, 48), new THREE.MeshBasicMaterial({ color: 0x3affb0, transparent: true, opacity: 0.18, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    halo.quaternion.copy(orient.quaternion);
+    g.add(halo);
+    // 通過面の薄い膜
+    const film = new THREE.Mesh(new THREE.CircleGeometry(r.radius * 0.97, 40), new THREE.MeshBasicMaterial({ color: 0x3affb0, transparent: true, opacity: 0.1, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+    film.quaternion.copy(orient.quaternion);
+    g.add(film);
+    // 番号
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: numberTexture(i + 1), depthWrite: false, fog: false, transparent: true }));
+    sprite.scale.setScalar(Math.max(6, r.radius * 0.7));
+    sprite.position.set(0, r.radius + tube + sprite.scale.y * 0.6, 0);
+    g.add(sprite);
+    group.add(g);
+    // 支柱と地面の影
+    let pole = null, shadow = null;
+    if (terr && r.normal.y > -0.9) {
+      const gy = Math.max(terr.surfaceAt(r.pos.x, r.pos.z), terr.roofAt(r.pos.x, r.pos.z));
+      const h = r.pos.y - r.radius - gy;
+      if (h > 2) {
+        pole = new THREE.Mesh(new THREE.CylinderGeometry(tube * 0.35, tube * 0.35, h, 6), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 }));
+        pole.position.set(r.pos.x, gy + h / 2, r.pos.z);
+        group.add(pole);
+      }
+      shadow = new THREE.Mesh(new THREE.RingGeometry(r.radius * 0.8, r.radius * 1.1, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }));
+      shadow.position.set(r.pos.x, gy + 0.3, r.pos.z);
+      group.add(shadow);
+    }
+    return { g, torus, halo, film, sprite, pole, shadow };
   });
+  // 案内線（次のリングから先へ）
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(Math.max(2, rings.length) * 3), 3));
+  const line = new THREE.Line(lineGeo, new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 12, gapSize: 10, transparent: true, opacity: 0.55, fog: false }));
+  line.frustumCulled = false;
+  group.add(line);
+  let lastIdx = -1;
   return {
     group,
     update(state, t) {
       const idx = state.rings ? state.rings.index : 0;
-      meshes.forEach((m, i) => {
-        if (i < idx) { m.visible = false; return; }
-        m.visible = i < idx + 4;
+      items.forEach((it, i) => {
+        const vis = i >= idx && i < idx + 5;
+        it.g.visible = vis;
+        if (it.pole) it.pole.visible = vis;
+        if (it.shadow) it.shadow.visible = vis;
+        if (!vis) return;
         const next = i === idx;
-        m.material.color.setHex(next ? 0x3affb0 : 0xffc23a);
-        m.material.opacity = next ? 0.75 + 0.2 * Math.sin(t * 6) : 0.5;
+        it.torus.material.color.setHex(next ? 0x3affb0 : 0xffc23a);
+        it.torus.material.opacity = next ? 0.8 + 0.2 * Math.sin(t * 6) : 0.6 - (i - idx) * 0.08;
+        it.halo.visible = next;
+        it.halo.material.opacity = 0.14 + 0.1 * Math.sin(t * 6);
+        it.film.visible = next;
+        it.sprite.material.opacity = next ? 1 : 0.6;
       });
+      if (idx !== lastIdx) {
+        lastIdx = idx;
+        const arr = lineGeo.attributes.position.array;
+        let n = 0;
+        for (let i = idx; i < rings.length; i++) { arr[n * 3] = rings[i].pos.x; arr[n * 3 + 1] = rings[i].pos.y; arr[n * 3 + 2] = rings[i].pos.z; n++; }
+        lineGeo.setDrawRange(0, n);
+        lineGeo.attributes.position.needsUpdate = true;
+        line.computeLineDistances();
+        line.visible = n >= 2;
+      }
     },
   };
 }

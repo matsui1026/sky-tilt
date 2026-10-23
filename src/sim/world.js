@@ -94,10 +94,13 @@ export class World {
     const agl = Math.max(0, p.y - ground);
     let wx = 0, wy = 0, wz = 0;
     if (this.windSpeed > 0) {
-      const prof = 0.55 + 0.45 * smoothstep(0, 300, agl);
+      const prof = 0.55 + 0.45 * smoothstep(0, 300, agl) + 0.35 * smoothstep(300, 1500, agl);
       const ws = this.windSpeed * prof;
-      wx = this.windDir.x * ws;
-      wz = this.windDir.z * ws;
+      // 高さによる風向の変化（上空ほど時計回りに最大 100°）。熱気球はこれを使って進む向きを選ぶ
+      const veer = this.windVeerAt(agl);
+      const c = Math.cos(veer), sn = Math.sin(veer);
+      wx = (this.windDir.x * c - this.windDir.z * sn) * ws;
+      wz = (this.windDir.x * sn + this.windDir.z * c) * ws;
       // 斜面上昇風: 風が斜面を駆け上がる成分
       if (agl < 900) {
         const g = terr.gradient(p.x, p.z, 40);
@@ -117,6 +120,20 @@ export class World {
     }
     if (this.thermals.length) wy += this.thermalLift(p, ground);
     return { x: wx, y: wy, z: wz };
+  }
+
+  /** 対地高度 agl での風向の回転 [rad]（地表 0 → 1500 m で約 100°） */
+  windVeerAt(agl) {
+    return 1.75 * smoothstep(80, 1500, agl);
+  }
+
+  /** 基本の風（乱気流・上昇気流を除く）の水平ベクトル */
+  baseWindAt(agl) {
+    if (!this.windSpeed) return { x: 0, z: 0 };
+    const prof = 0.55 + 0.45 * smoothstep(0, 300, agl) + 0.35 * smoothstep(300, 1500, agl);
+    const veer = this.windVeerAt(agl);
+    const c = Math.cos(veer), sn = Math.sin(veer);
+    return { x: (this.windDir.x * c - this.windDir.z * sn) * this.windSpeed * prof, z: (this.windDir.x * sn + this.windDir.z * c) * this.windSpeed * prof };
   }
 
   thermalLift(p, ground) {
