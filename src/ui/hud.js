@@ -49,6 +49,9 @@ export class Hud {
     const fn = { basic: this.drawBasic, pfd: this.drawPfd, fighter: this.drawFighter, heli: this.drawHeli, glide: this.drawGlide, balloon: this.drawBalloon, car: this.drawCar }[this.type] || this.drawBasic;
     fn.call(this, st, extra);
     this.drawCommon(st, extra);
+    this.drawCarOverlay(st, extra);
+    this.drawLandingGuide(st);
+    this.drawLesson(extra);
     if (this.showMinimap !== false) this.drawMinimap(st, extra);
   }
 
@@ -186,6 +189,7 @@ export class Hud {
       if (def.model === 'human' && st.phase === 'freefall' && st.agl < 900) { this.warning('パラシュートを開いて！', wy, '#ffc23a'); wy += 42; }
       if (extra.threats && extra.threats.length) { this.warning(`敵機に狙われています（${extra.threats.length}）`, wy, '#ff6a3a'); wy += 42; }
       if (extra.net && extra.net.weak) { this.warning('通信が不安定です', wy, '#ffc23a'); wy += 42; }
+      if (st.terrainWarn) { this.warning('地形に注意', wy, '#ff6a3a'); wy += 42; }
     }
     if (extra.hitDirs && extra.hitDirs.length) this.drawHitDirs(extra);
     // リングコース
@@ -642,7 +646,7 @@ export class Hud {
     const R = 46;
     const x0 = this.mirror ? this.safe.l + 12 + R : this.W - this.safe.r - 12 - R;
     const y0 = 68 + R;
-    const range = extra.mapRange || 3000;
+    const range = Math.round(extra.mapRange || 3000);
     const k = R / range;
     this.record(x0 - R, y0 - R, R * 2, R * 2, 'minimap');
     c.save();
@@ -672,6 +676,15 @@ export class Hud {
       else c.arc(px, py, r, 0, Math.PI * 2);
       c.fill();
     };
+    // コース
+    if (extra.mapTrack) {
+      c.strokeStyle = 'rgba(255,255,255,0.6)';
+      c.lineWidth = 2;
+      c.beginPath();
+      extra.mapTrack.forEach((p, i) => { const [mx, my] = toMap(p.x, p.z); if (i) c.lineTo(mx, my); else c.moveTo(mx, my); });
+      c.closePath();
+      c.stroke();
+    }
     for (const it of extra.mapItems || []) dot(it.x, it.z, it.color, it.r || 3, it.shape);
     c.restore();
     // 自機
@@ -738,31 +751,151 @@ export class Hud {
     this.statusLine([`バーナー ${Math.round((b.burner ?? 0) * 100)}%`, b.venting ? '排気中' : null, st.onGround ? '接地' : null], H - 18);
   }
 
-  // ---------- 空飛ぶ車 ----------
+  // ---------- 車（走行）・空飛ぶ車 ----------
   drawCar(st) {
     const H = this.H, cx = this.cx, sp = this.sp, yMid = H * 0.5;
     const fly = st.carMode === 'fly';
-    this.headingTape(st.attitude.heading, 24);
-    this.valueBox('速度', String(Math.round(st.groundSpeed * KMH)), 'km/h', cx - sp, yMid);
     if (fly) {
+      this.headingTape(st.attitude.heading, 24);
+      this.valueBox('速度', String(Math.round(st.groundSpeed * KMH)), 'km/h', cx - sp, yMid);
       this.valueBox('対地高度', st.agl < 100 ? st.agl.toFixed(1) : String(Math.round(st.agl)), 'm', cx + sp, yMid);
       this.valueBox('昇降率', fmtSigned(st.vs, 1), 'm/s', cx + sp, yMid + 54);
       this.attitudeBall(cx, H - 70, 34, st.attitude.pitch, st.attitude.roll);
-    } else {
-      this.valueBox('標高', String(Math.round(st.altitude)), 'm', cx + sp, yMid);
+      if (st.fuel != null) this.fuelGauge(st.fuel, 'バッテリー');
+      this.statusLine(['✈ 飛行モード', `推力 ${Math.round(st.throttle * 100)}%`, st.onGround ? '接地' : null], H - 18);
+      return;
     }
+    this.drawSpeedo(st);
     if (st.fuel != null) this.fuelGauge(st.fuel, 'バッテリー');
-    this.statusLine([fly ? '✈ 飛行モード' : '🚗 走行モード', `${fly ? '推力' : 'アクセル'} ${Math.round(st.throttle * 100)}%`, fly && st.onGround ? '接地' : null], H - 18);
+  }
+
+  /** 速度計: 大きな速度・ギア・回転計・ニトロ */
+  drawSpeedo(st) {
+    const c = this.ctx;
+    const car = st.car || {};
+    const cx = this.cx, H = this.H;
+    const w = Math.min(200, this.half * 2 - 8);
+    const x = cx - w / 2, y = H - 74;
+    this.box(x, y, w, 66, { r: 12 });
+    // 回転計（上の帯。上限の手前で赤）
+    const rpm = clamp(car.rpm ?? 0, 0, 1);
+    const bw = w - 16;
+    c.fillStyle = 'rgba(255,255,255,0.14)';
+    c.fillRect(x + 8, y + 6, bw, 6);
+    c.fillStyle = rpm > 0.92 ? '#ff4a3a' : rpm > 0.75 ? '#ffc23a' : '#3affb0';
+    c.fillRect(x + 8, y + 6, bw * rpm, 6);
+    // 速度とギア
+    this.text(String(Math.round(car.speedKmh ?? st.groundSpeed * KMH)), cx + 8, y + 33, { size: 30, weight: 900, align: 'right' });
+    this.text('km/h', cx + 12, y + 38, { size: 11, align: 'left', color: 'rgba(220,230,240,0.85)', weight: 600, shadow: false });
+    this.text(String(car.gear ?? '-'), x + 22, y + 33, { size: 24, weight: 900, color: car.gear === 'R' ? '#ff8a6a' : '#ffe08a' });
+    this.text(car.surfaceName || '', x + w - 8, y + 26, { size: 10, align: 'right', color: 'rgba(220,230,240,0.85)', weight: 600, shadow: false });
+    if (car.air) this.text('空中', x + w - 8, y + 40, { size: 10, align: 'right', color: '#9fd8ff', weight: 700, shadow: false });
+    // ニトロ
+    if (car.hasNitro) {
+      c.fillStyle = 'rgba(255,255,255,0.14)';
+      c.fillRect(x + 8, y + 53, bw, 6);
+      c.fillStyle = car.nitroOn ? '#ffffff' : '#6fc8ff';
+      c.fillRect(x + 8, y + 53, bw * clamp(car.nitro, 0, 1), 6);
+    }
+  }
+
+  /** 車のモードの表示（ドリフトの点、レース、駐車） */
+  drawCarOverlay(st, extra) {
+    const car = st.car;
+    if (!car) return;
+    const cx = this.cx;
+    const d = car.drift;
+    // いまのドリフトの点数（確定前）
+    if (d && d.score > 0 && (st.carMode == null || st.carMode === 'drive')) {
+      const y = this.H * 0.3;
+      const col = d.active ? '#ffd84a' : 'rgba(255,216,74,0.65)';
+      this.text(`${d.score.toLocaleString()}`, cx, y, { size: 34, weight: 900, color: col });
+      this.text(`×${d.mult}  ${Math.round(d.angle)}°`, cx, y + 26, { size: 15, weight: 800, color: col });
+    }
+    if (st.race) {
+      const r = st.race;
+      const best = r.bestLap != null ? `  ベスト ${fmtTime(r.bestLap)}` : '';
+      this.statusLine([`${r.place}/${r.cars} 位`, `周 ${Math.min(r.lap, r.laps)}/${r.laps}`, `${fmtTime(r.time)}${best}`], 26);
+      if (r.countdown > 0) {
+        this.text(String(Math.ceil(r.countdown)), cx, this.H * 0.36, { size: 72, weight: 900, color: '#ffe24a' });
+      } else if (r.time < 1) {
+        this.text('GO!', cx, this.H * 0.36, { size: 60, weight: 900, color: '#3affb0' });
+      }
+      if (r.wrongWay) this.warning('逆走しています', 92, '#ff6a3a');
+      if (extra.camera) this.pointer({ x: r.next.x, y: r.next.y + 4, z: r.next.z }, extra, '#3affb0', '');
+    }
+    if (st.driftMode) {
+      const m = st.driftMode;
+      this.statusLine([`残り ${fmtTime(m.left)}`, `合計 ${m.total.toLocaleString()}`, `最高 ${m.best.toLocaleString()}`], 26);
+    }
+    if (st.parking) {
+      const p = st.parking;
+      this.statusLine([`駐車 ${Math.min(p.index + 1, p.total)}/${p.total}`, fmtTime(p.time), p.inside ? '枠の中！止まって' : p.dist != null ? `${fmtDist(p.dist)}` : null], 26);
+      if (p.box && extra.camera) this.pointer({ x: p.box.x, y: p.box.y + 1, z: p.box.z }, extra, p.inside ? '#3affb0' : '#ffc23a', '');
+      if (p.hold > 0.02) {
+        const bw = 120;
+        this.box(cx - bw / 2, 44, bw, 8, { r: 4, fill: 'rgba(0,0,0,0.5)', stroke: null });
+        this.ctx.fillStyle = '#3affb0';
+        this.ctx.fillRect(cx - bw / 2 + 1, 45, (bw - 2) * clamp(p.hold, 0, 1), 6);
+      }
+    }
+  }
+
+  /** 練習モードの案内 */
+  drawLesson(extra) {
+    const L = extra.lesson;
+    if (!L) return;
+    const c = this.ctx;
+    c.font = `700 14px ${FONT}`;
+    const maxW = Math.max(160, this.half * 2 - 10);
+    const lines = wrapText(c, L.text, maxW - 20);
+    const h = 20 + lines.length * 18;
+    const y = 72;
+    this.box(this.cx - maxW / 2, y, maxW, h, { fill: 'rgba(8,24,40,0.82)', stroke: '#3affb0' });
+    lines.forEach((ln, i) => this.text(ln, this.cx, y + 19 + i * 18, { size: 14 }));
+    this.text(`${L.step}/${L.total}`, this.cx + maxW / 2 - 6, y - 7, { size: 10, align: 'right', color: '#9fffd0', weight: 700 });
+  }
+
+  /** 着陸の誘導: 進入コースからのずれ（縦＝高さ、横＝左右） */
+  drawLandingGuide(st) {
+    const g = st.landingGuide;
+    if (!g) return;
+    const c = this.ctx;
+    const S = 62;
+    const cx = this.cx, cy = 118;
+    this.box(cx - S / 2, cy - S / 2, S, S, { r: 8 });
+    c.strokeStyle = 'rgba(255,255,255,0.35)';
+    c.lineWidth = 1;
+    c.beginPath(); c.moveTo(cx - S / 2, cy); c.lineTo(cx + S / 2, cy); c.moveTo(cx, cy - S / 2); c.lineTo(cx, cy + S / 2); c.stroke();
+    // 緑の線に自機（中心）を重ねるように飛ぶ
+    const dy = clamp(-g.gsDev * 0.6, -S / 2 + 2, S / 2 - 2); // 高すぎる → 線は下
+    const dx = clamp(-g.locDev * 0.35, -S / 2 + 2, S / 2 - 2); // 右にずれている → 線は左
+    c.strokeStyle = '#3affb0';
+    c.lineWidth = 2.5;
+    c.beginPath(); c.moveTo(cx - S / 2 + 2, cy + dy); c.lineTo(cx + S / 2 - 2, cy + dy); c.moveTo(cx + dx, cy - S / 2 + 2); c.lineTo(cx + dx, cy + S / 2 - 2); c.stroke();
+    const msg = Math.abs(g.gsDev) < 10 ? '高さ OK' : g.gsDev > 0 ? '高い' : '低い';
+    this.text(msg, cx, cy + S / 2 + 10, { size: 11, color: Math.abs(g.gsDev) < 10 ? '#3affb0' : '#ffe08a' });
   }
 }
 
+function wrapText(c, text, maxW) {
+  const lines = [];
+  let cur = '';
+  for (const ch of text) {
+    if (c.measureText(cur + ch).width > maxW && cur) { lines.push(cur); cur = ch; } else cur += ch;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
 export function fmtDist(d) {
   return d >= 1000 ? `${(d / 1000).toFixed(1)} km` : `${Math.round(d)} m`;
 }
 
 export function fmtTime(t) {
-  const m = Math.floor(t / 60);
-  const s = t - m * 60;
+  // 0.1 秒に丸めてから分と秒に分ける（59.96 秒が「00:60.0」にならないように）
+  const tenths = Math.round(t * 10);
+  const m = Math.floor(tenths / 600);
+  const s = (tenths - m * 600) / 10;
   return `${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`;
 }
 function fmtSigned(v, d) {

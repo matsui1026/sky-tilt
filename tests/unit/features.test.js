@@ -466,7 +466,7 @@ describe('空飛ぶ車（第 2 回レビュー対応）', () => {
     sim.vs.onGround = true;
     sim.vs.psi = Math.PI / 2; // +x 向き
     sim.vs.pos = { x: b.x - b.w / 2 + 3, y: top + VEHICLES.flycar.p.cgHeight, z: b.z };
-    sim.vs.v = 12;
+    sim.vs.vx = 12;
     sim.setInput({ throttle: 0.3, pitch: 0, roll: 0 });
     sim.step(30);
     expect(sim.getState().status).toBe('flying');
@@ -474,7 +474,7 @@ describe('空飛ぶ車（第 2 回レビュー対応）', () => {
     let air = false;
     for (let i = 0; i < 60 * 10 && sim.getState().status === 'flying'; i++) {
       sim.step(1);
-      if (sim.vs.airborne) air = true;
+      if (sim.vs.air) air = true;
     }
     expect(air).toBe(true);
   });
@@ -487,7 +487,7 @@ describe('空飛ぶ車（第 2 回レビュー対応）', () => {
     sim.vs.psi = Math.PI / 2;
     const x = b.x - b.w / 2 - 1.2;
     sim.vs.pos = { x, y: terr.surfaceAt(x, b.z) + VEHICLES.flycar.p.cgHeight, z: b.z };
-    sim.vs.v = 0;
+    sim.vs.vx = 0;
     sim.drainEvents();
     sim.setInput({ throttle: 0.3 });
     sim.step(60 * 4);

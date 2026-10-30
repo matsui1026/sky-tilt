@@ -3,12 +3,14 @@ import { DEG, clamp, mulberry32, hashString, vsub, vdot, vlen, vnorm, vadd, vsca
 import { fieldLocal } from './terrainGen.js';
 import { stallSpeed } from './vehicles/fixedwing.js';
 
-export const CRUISE = { prop: 50, airliner: 125, fighter: 200, sailplane: 29, heli: 35, drone: 18, flycar: 45, balloon: 0, paraglider: 10.5, jetsuit: 28, wingsuit: 31, skydive: 0 };
+export const CRUISE = { prop: 50, airliner: 125, fighter: 200, sailplane: 29, heli: 35, drone: 18, flycar: 45, balloon: 0, paraglider: 10.5, jetsuit: 28, wingsuit: 31, skydive: 0, driftcar: 40, rally: 35, hypercar: 60, monster: 30, kart: 25, hover: 40 };
 export const RING_PENALTY = 5;
 
 /** 機体ごとに遊べるモード */
 export function modesFor(def) {
   if (def.model === 'balloon') return ['free', 'landing'];
+  if (def.model === 'car') return ['free', 'race', 'drift', 'parking'];
+  if (def.model === 'flycar') return ['free', 'race', 'drift', 'parking', 'rings', 'combat', 'landing'];
   return ['free', 'rings', 'combat', 'landing'];
 }
 

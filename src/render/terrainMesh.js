@@ -17,6 +17,8 @@ function terrainColor(loc, terrain, h, slope, x, z, out) {
     case 'island':
     case 'city':
       if (h < 3.5) out.setHex(P.sand);
+      // 市街地は舗装（ビルの間を車で走れる）
+      if (loc.generator === 'city' && h >= 3.5) out.lerp(tmpC2.setHex(0x5c6066), 1 - smoothstep(2700, 3150, Math.hypot(x, z)));
       if (rel > 0.55) out.lerp(tmpC2.setHex(P.high), smoothstep(0.55, 0.8, rel));
       break;
     case 'mountains':
@@ -31,6 +33,9 @@ function terrainColor(loc, terrain, h, slope, x, z, out) {
     }
     case 'snow':
       out.setHex(P.low).lerp(tmpC2.setHex(P.top), smoothstep(0.3, 0.7, rel));
+      break;
+    case 'raceway':
+      out.lerp(tmpC2.setHex(P.high), smoothstep(0.4, 0.8, rel));
       break;
     default:
   }
@@ -219,7 +224,7 @@ function buildBuildings(terrain, loc) {
 function buildTrees(world) {
   const terrain = world.terrain;
   const loc = world.location;
-  const counts = { island: 2600, mountains: 4200, city: 700, desert: 0, snow: 1800 };
+  const counts = { island: 2600, mountains: 4200, city: 700, desert: 0, snow: 1800, raceway: 1500 };
   const N = counts[loc.generator] ?? 0;
   if (!N) return null;
   const geo = new THREE.ConeGeometry(1, 1, 5, 1);
@@ -249,6 +254,7 @@ function buildTrees(world) {
       if (loc.generator === 'mountains' && h > maxH * 0.62) continue;
       if (loc.generator === 'snow' && h > maxH * 0.5) continue;
       if (fieldMask(terrain.field, x, z, 60, 1) > 0.2) continue;
+      if (loc.generator === 'raceway' && Math.hypot(x, z) < 1000) continue;
       if (terrain.buildings.length) {
         if (terrain.roofAt(x, z) > -Infinity) continue;
         if (Math.hypot(x, z) < 3200 && terrain.buildingHit({ x, y: h + 5, z }, 30)) continue;

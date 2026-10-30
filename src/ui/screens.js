@@ -2,10 +2,15 @@
 // 2 人プレイのロビー、墜落、結果
 import { h, tapButton } from './dom.js';
 import { ICONS, LOC_THUMBS } from './icons.js';
-import { VEHICLES, VEHICLE_ORDER } from '../data/vehicles.js';
+import { VEHICLES, VEHICLE_ORDER, VEHICLE_TABS } from '../data/vehicles.js';
 import { LOCATIONS, LOCATION_ORDER, TIMES, TIME_ORDER, WEATHERS, WEATHER_ORDER, MODES, MODE_ORDER } from '../data/locations.js';
 import { modesFor } from '../sim/modes.js';
 import { fmtTime } from './hud.js';
+import { ACHIEVEMENTS } from '../game/progress.js';
+import { LESSONS } from '../game/lessons.js';
+
+/** 車の塗り色の候補 */
+const PAINTS = [0xe8e8ec, 0xd62828, 0x2f6fe0, 0xf0b020, 0x18a058, 0x22262c];
 
 function bars(label, n, cls = '') {
   const segs = h('div', { class: 'segs' });
@@ -32,6 +37,8 @@ function segmented(items, order, selected, onSelect, nameKey = 'name', testPrefi
   }
   wrap.select = select;
   wrap.setEnabled = (ids) => { for (const [id, b] of Object.entries(btns)) b.disabled = !ids.includes(id); };
+  // 遊べないものは出さない（モードが増えて横に並ばなくなるため）
+  wrap.setVisible = (ids) => { for (const [id, b] of Object.entries(btns)) { b.style.display = ids.includes(id) ? '' : 'none'; b.disabled = !ids.includes(id); } };
   return wrap;
 }
 
@@ -41,7 +48,7 @@ export function tutorialText(def) {
   const btn = def.buttons.length ? `左のボタン: ${def.buttons.filter((b) => !/R$/.test(b.id)).map((b) => b.label.replace(/[◀▶ ]/g, '')).join('・')}。` : '';
   return {
     tilt: g.tilt || '',
-    buttons: `${g.throttle ? `右手のスライダー: ${g.throttle}` : ''}${btn}`,
+    buttons: `${g.throttle ? (def.model === 'car' ? g.throttle : `右手のスライダー: ${g.throttle}`) : ''}${btn}`,
     tip: (g.tips || [])[0] || '',
   };
 }
@@ -50,9 +57,10 @@ const PC_KEYS = [
   ['W / ↑', '機首下げ（奥へ倒す）'], ['S / ↓', '機首上げ（手前に引く）'], ['A D / ← →', 'ロール（左右）'], ['Q / E', 'ヨー・ラダー'],
   ['Shift / Ctrl', 'スロットル 上げ / 下げ'], ['F', 'フラップ'], ['G', 'ギア'], ['X', 'スポイラー・エアブレーキ'], ['B', 'アフターバーナー'],
   ['Space', 'パラシュート'], ['T', '飛行 ⇄ 走行'], ['K / Enter', '射撃（押している間）'], ['M', 'ミサイル'], ['H / J', 'バーナー / 排気弁'],
-  ['C', '視点切替'], ['R', '再キャリブレーション'], ['Y', '早送り（熱気球・滑空機）'], ['Esc / P', '一時停止'],
+  ['C', '視点切替'], ['R', '再キャリブレーション'], ['Y', '早送り（熱気球・滑空機）'], ['L', 'オートパイロット'], ['Esc / P', '一時停止'],
+  ['車: W / S', 'アクセル / ブレーキ（押し続けるとバック）'], ['車: A D', 'ハンドル'], ['車: Space', 'サイドブレーキ'], ['車: N', 'ニトロ'], ['車: V', '復帰'],
 ];
-const PAD_KEYS = [['左スティック', 'ロール・ピッチ'], ['右スティック上下', 'スロットル'], ['LB / RB', 'ヨー'], ['A / RT', '射撃・バーナー（押している間）'], ['LT', '排気弁（熱気球）'], ['B', '機体ボタン（ラダー以外の最初のボタン）'], ['X', 'ミサイル'], ['Y', '視点'], ['Back', '早送り'], ['Start', '一時停止']];
+const PAD_KEYS = [['左スティック', 'ロール・ピッチ'], ['右スティック上下', 'スロットル'], ['LB / RB', 'ヨー'], ['A / RT', '射撃・バーナー（押している間）'], ['LT', '排気弁（熱気球）'], ['B', '機体ボタン（ラダー以外の最初のボタン）'], ['X', 'ミサイル'], ['Y', '視点'], ['Back', '早送り'], ['Start', '一時停止'], ['車: RT / LT', 'アクセル / ブレーキ（アナログ）'], ['車: A', 'サイドブレーキ'], ['車: X', 'ニトロ']];
 
 export class Screens {
   constructor(root, cb) {
@@ -70,13 +78,17 @@ export class Screens {
     // タイトル
     this.el.title = h('div', { class: 'screen bg-sky col center', id: 'scr-title' },
       h('h1', { class: 'title-logo' }, 'SKY', h('span', {}, 'TILT')),
-      h('p', { class: 'subtitle' }, 'スマホを傾けて大空を飛ぼう'),
+      h('p', { class: 'subtitle' }, 'スマホを傾けて、空を飛び、車で滑ろう'),
       tapButton('タップしてスタート', () => this.cb.onStart(), 'btn primary big', { id: 'btn-start' }),
       h('div', { class: 'row', style: { marginTop: '12px' } },
         tapButton('👥 2人で飛ぶ', () => this.cb.onMultiplayer(), 'btn small', { id: 'btn-title-mp' }),
         tapButton('📖 操作ガイド', () => this.showGuide(null, 'title'), 'btn small', { id: 'btn-title-guide' }),
         tapButton('⚙ 設定', () => this.cb.onOpenSettings('title'), 'btn small', { id: 'btn-title-settings' })),
-      h('div', { class: 'hint' }, '横向きで遊んでください ／ PC: WASD・矢印キー＝姿勢　Shift/Ctrl＝スロットル　Q/E＝ヨー　K＝射撃'),
+      h('div', { class: 'row', style: { marginTop: '8px' } },
+        tapButton('📅 今日のチャレンジ', () => this.cb.onDaily(), 'btn small', { id: 'btn-title-daily' }),
+        tapButton('🎓 練習', () => this.showLessons(), 'btn small', { id: 'btn-title-lessons' }),
+        tapButton('🏆 記録', () => this.cb.onRecords(), 'btn small', { id: 'btn-title-records' })),
+      h('div', { class: 'hint' }, '横向きで遊んでください ／ PC: WASD・矢印キー　Shift/Ctrl＝スロットル　Q/E＝ヨー　K＝射撃　Space＝サイド'),
     );
 
     // 機体選択
@@ -94,6 +106,18 @@ export class Screens {
       this.vcardEls[id] = card;
       vcards.append(card);
     }
+    // 機体の分類タブと、車の色
+    this.tabBtns = {};
+    this.tabRow = h('div', { class: 'tab-row', id: 'vehicle-tabs' }, VEHICLE_TABS.map((t) => {
+      const b = tapButton(t.name, () => this.selectTab(t.id), 'tab', { 'data-tab': t.id });
+      this.tabBtns[t.id] = b;
+      return b;
+    }));
+    this.paintRow = h('div', { class: 'paint-row', id: 'paint-row' }, PAINTS.map((col) => {
+      const b = tapButton('', () => this.selectPaint(col), 'swatch', { 'data-paint': col.toString(16), 'aria-label': '塗り色' });
+      b.style.background = `#${col.toString(16).padStart(6, '0')}`;
+      return b;
+    }));
     this.vehicleTitle = h('h2', {}, '機体を選ぶ');
     this.el.vehicle = h('div', { class: 'screen bg-sky col', id: 'scr-vehicle' },
       h('div', { class: 'screen-head' },
@@ -101,7 +125,9 @@ export class Screens {
         this.vehicleTitle,
         tapButton('📖 ガイド', () => this.showGuide(this.state.vehicle, 'vehicle'), 'btn small', { id: 'btn-vehicle-guide' }),
         tapButton('次へ →', () => this.cb.onVehicleNext(), 'btn primary', { id: 'btn-vehicle-next' })),
-      h('div', { class: 'screen-body col', style: { justifyContent: 'center' } }, vcards, h('div', { class: 'swipe-hint' }, `← 横にスワイプで全 ${VEHICLE_ORDER.length} 機体 →`)),
+      h('div', { class: 'screen-body col', style: { justifyContent: 'center' } },
+        h('div', { class: 'row', style: { justifyContent: 'space-between', flexWrap: 'nowrap' } }, this.tabRow, this.paintRow),
+        vcards),
     );
     const endWatch = (el) => {
       const upd = () => el.classList.toggle('at-end', el.scrollLeft + el.clientWidth >= el.scrollWidth - 4);
@@ -152,6 +178,7 @@ export class Screens {
           tapButton('📖 操作ガイド', () => this.showGuide(this.cb.currentVehicle ? this.cb.currentVehicle() : null, 'pause'), 'btn', { id: 'btn-pause-guide' }),
           tapButton('✈ 機体変更', () => this.cb.onChangeVehicle(), 'btn', { id: 'btn-change-vehicle' }),
           tapButton('↺ リスタート', () => this.cb.onRestart(), 'btn', { id: 'btn-restart' }),
+          tapButton('📷 写真', () => this.cb.onPhoto(), 'btn', { id: 'btn-photo' }),
           tapButton('⌂ タイトルへ', () => this.cb.onTitle(), 'btn', { id: 'btn-title' }),
         )));
 
@@ -162,11 +189,15 @@ export class Screens {
     this.el.wait = h('div', { class: 'screen bg-sky col center', id: 'scr-wait' });
     this.el.crash = h('div', { class: 'screen dim col center', id: 'scr-crash' });
     this.el.result = h('div', { class: 'screen dim col center', id: 'scr-result' });
+    this.el.records = h('div', { class: 'screen bg-guide col', id: 'scr-records' });
+    this.el.lessons = h('div', { class: 'screen bg-guide col', id: 'scr-lessons' });
+    this.el.daily = h('div', { class: 'screen bg-sky col center', id: 'scr-daily' });
 
     endWatch(lcards);
     for (const k of Object.keys(this.el)) r.append(this.el[k]);
     this.selectVehicle(this.state.vehicle);
     this.selectLocation(this.state.location);
+    this.tabBtns.all.classList.add('sel');
   }
 
   setPauseMessage(msg) {
@@ -185,11 +216,38 @@ export class Screens {
     for (const [k, el] of Object.entries(this.vcardEls)) el.classList.toggle('sel', k === id);
     // 機体で遊べないモードは選べなくする
     const ok = modesFor(VEHICLES[id]);
+    const isCar = VEHICLES[id].category === 'car';
+    if (this.paintRow) {
+      this.paintRow.style.display = isCar ? '' : 'none';
+      const cur = this.cb.getPaint ? this.cb.getPaint(id) : null;
+      const def = VEHICLES[id].body ? VEHICLES[id].body.paint : 0xc8102e;
+      for (const b of this.paintRow.children) b.classList.toggle('sel', parseInt(b.dataset.paint, 16) === (cur ?? def));
+    }
+    if (this.flyBtn) this.flyBtn.textContent = isCar ? 'スタート ▶' : '飛行開始 ▶';
     if (this.modeCtl) {
-      this.modeCtl.setEnabled(ok);
+      this.modeCtl.setVisible(ok);
       if (!ok.includes(this.state.mode)) { this.state.mode = 'free'; this.modeCtl.select('free'); }
     }
     this.updateNote();
+  }
+
+  selectTab(tab) {
+    const t = VEHICLE_TABS.find((x) => x.id === tab) || VEHICLE_TABS[0];
+    for (const [k, b] of Object.entries(this.tabBtns)) b.classList.toggle('sel', k === t.id);
+    let first = null;
+    for (const [id, el] of Object.entries(this.vcardEls)) {
+      const show = !t.cats || t.cats.includes(VEHICLES[id].category);
+      el.style.display = show ? '' : 'none';
+      if (show && !first) first = id;
+    }
+    const cur = VEHICLES[this.state.vehicle];
+    if (t.cats && !t.cats.includes(cur.category)) this.selectVehicle(first);
+    this.vcardEls[this.state.vehicle].scrollIntoView({ block: 'nearest', inline: 'center' });
+  }
+
+  selectPaint(col) {
+    if (this.cb.setPaint) this.cb.setPaint(this.state.vehicle, col);
+    for (const b of this.paintRow.children) b.classList.toggle('sel', parseInt(b.dataset.paint, 16) === col);
   }
 
   /** 選択の組み合わせに応じた注意書き */
@@ -198,11 +256,21 @@ export class Screens {
     const s = this.state;
     const v = VEHICLES[s.vehicle];
     let msg = '';
-    if (s.weather === 'windy' && s.vehicle === 'paraglider') msg = '⚠ 強風（13 m/s）はパラグライダーの速度（約 10 m/s）より速く、前に進めず押し戻されます';
+    const carLike = v.category === 'car';
+    if (carLike && s.mode === 'race') msg = `ライバル 3 台と競走。チェックポイントを順に通って周回。${s.location === 'raceway' ? 'サーキットは専用コース。' : 'フィールドの周りの特設コース。'}`;
+    else if (carLike && s.mode === 'drift') msg = '制限時間 90 秒でドリフトの点数を稼ぐ。曲がりながら「サイド」で滑り出す';
+    else if (carLike && s.mode === 'parking') msg = '黄色い枠の中に止める（前向きでも後ろ向きでも OK）。3 か所の位置と向きの正確さで採点';
+    else if (carLike && s.weather === 'rain') msg = '雨で滑りやすくなっています（グリップ 72%）';
+    else if (carLike && s.weather === 'snowfall') msg = '雪で滑りやすくなっています（グリップ 50%）';
+    else if (carLike && s.location === 'snow') msg = '雪山は滑りやすい路面です。ラリーカーやモンスターが有利';
+    else if (s.vehicle === 'hover') msg = 'ホバーカーは水の上も走れます';
+    else if (s.weather === 'fog') msg = '霧で遠くが見えません。レーダーと HUD の矢印を頼りに';
+    else if (s.weather === 'windy' && s.vehicle === 'paraglider') msg = '⚠ 強風（13 m/s）はパラグライダーの速度（約 10 m/s）より速く、前に進めず押し戻されます';
     else if (s.mode === 'combat' && !v.weapon) msg = 'この機体は武器がありません。風船に体当たりして割りましょう';
     else if (s.mode === 'combat') msg = `武器: ${v.weapon.name}${v.weapon.missiles ? '・追尾ミサイル' : ''}。風船・地上の的・敵機を撃ち落とす`;
     else if (s.vehicle === 'balloon') msg = '熱気球はリングコース・射撃では遊べません。高さごとの風を使って目標へ';
     else if (s.weather === 'windy') msg = '強風と乱気流で機体が揺れます';
+    else if (s.weather === 'rain' || s.weather === 'snowfall') msg = 'サーマルは弱く、視界も悪くなります';
     else if (s.vehicle === 'paraglider' && s.time === 'night') msg = '夜はサーマルがほとんどありません。斜面上昇風を使いましょう';
     this.noteEl.textContent = msg;
     this.noteEl.style.display = msg ? '' : 'none';
@@ -266,10 +334,17 @@ export class Screens {
     choice('quality', '画質', { auto: '自動', high: '高', low: '低（省電力）' }, 'quality-');
     choice('difficulty', '射撃の難易度', { easy: 'やさしい', normal: 'ふつう', hard: 'むずかしい' }, 'difficulty-');
     toggle('lefty', '左利き配置（スティックを右に）');
+    choice('uiSize', 'ボタンの大きさ', { normal: '標準', large: '大きめ' }, 'uisize-');
+    slider('hudOpacity', 'HUD の濃さ', 0.3, 1, 0.05, (v) => `${Math.round(v * 100)}%`);
+    choice('camDist', 'カメラの距離', { near: '近い', normal: '標準', far: '遠い' }, 'camdist-');
+    choice('carAssist', '車のアシスト', { high: '強（簡単）', mid: '中', off: '切（実車風）' }, 'carassist-');
+    choice('carPedal', 'アクセル', { buttons: 'ボタン', tilt: '傾き', auto: '自動' }, 'carpedal-');
+    choice('carSteer', 'ハンドル', { tilt: '傾き／スティック', buttons: '◀▶ ボタン' }, 'carsteer-');
+    slider('carSens', 'ハンドル感度', 0.5, 2, 0.05, (v) => `${v.toFixed(2)}×`);
     el.append(h('div', { class: 'panel settings col', style: { gap: '4px' } },
       h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('h2', { style: { margin: '0' } }, '設定'), tapButton('閉じる', onClose, 'btn primary small', { id: 'btn-settings-close' })),
       h('div', { class: 'settings-grid' }, ...rows),
-      h('div', { class: 'hint', style: { textAlign: 'left', marginTop: '4px' } }, '傾き操作: 開始時の持ち方が「ニュートラル」。持ち方を変えたら ⟲ で再キャリブレーション。ゴースト: リングコースの自己ベストの飛び方を半透明で表示。難易度: エイムアシストの強さ・敵の弾の精度と威力・敵の数が変わります。'),
+      h('div', { class: 'hint', style: { textAlign: 'left', marginTop: '4px' } }, '傾き操作: 開始時の持ち方が「ニュートラル」。持ち方を変えたら ⟲ で再キャリブレーション。ゴースト: リングコースの自己ベストの飛び方を半透明で表示。難易度: エイムアシストの強さ・敵の弾の精度と威力・敵の数、レースのライバルの速さが変わります。車のアシスト: 強いほど滑らせる角度を傾きだけで決められ、スピンしにくくなります。アクセル「傾き」は奥へ倒すとアクセル、手前でブレーキ。「自動」はブレーキ以外は常に全開。'),
     ));
     this.show('settings');
   }
@@ -292,7 +367,7 @@ export class Screens {
         p: [T.tilt, 'センサーが使えない端末では、左下のスティックで操縦します。'],
       },
       {
-        t: '3. スロットルとボタン',
+        t: def.model === 'car' ? '3. アクセルとボタン' : '3. スロットルとボタン',
         svg: '<svg viewBox="0 0 200 100"><g fill="none" stroke="#fff" stroke-width="3"><rect x="150" y="14" width="26" height="76" rx="8"/><rect x="153" y="52" width="20" height="16" rx="4" fill="#fff"/><rect x="20" y="56" width="40" height="28" rx="7"/><rect x="66" y="56" width="40" height="28" rx="7"/></g><text x="62" y="44" fill="#3affb0" font-size="12" text-anchor="middle">機体ボタン</text><text x="162" y="10" fill="#3affb0" font-size="12" text-anchor="middle">スロットル</text></svg>',
         p: [T.buttons, T.tip, '詳しい説明は ❚❚ →「操作ガイド」。'],
       },
@@ -350,11 +425,29 @@ export class Screens {
           ...[['❚❚（左上）', '一時停止。設定・操作ガイド・機体変更・リスタート'], ['⟲（左上）', '再キャリブレーション（今の持ち方をニュートラルに。押したら 0.5 秒そのまま）'], ['視点（右上）', '後方追従 → コックピット → 外部視点'], ['▶×1（右上）', '早送り ×1 → ×2 → ×4（熱気球・パラグライダー・グライダーの自由飛行／着陸チャレンジ。地面が近いと自動で ×1）'], ['スロットル（右下）', '縦にドラッグして出力を調整（触れた位置には飛ばない）'], ['射撃（右下）', '射撃モードで、押している間撃つ。白い照準の近くの的には自動で狙いを補正し、黄色の点（偏差照準＝目標の未来位置）へ弾が飛ぶ'], ['画面中央の赤い弧', '撃たれた方向。「敵機に狙われています」が出たら旋回して振り切る'], ['左下の機体ボタン', '機体ごとに違う（左の一覧から機体を選ぶと説明）'], ['スティック（左下）', '傾きセンサーが使えないとき。下へ引くと機首上げ'], ['レーダー（右上）', '機首方向が上。緑=次のリング、赤=敵、橙=目標、水色=相手のプレイヤー']].map(([k, v]) => [h('span', { class: 'k' }, k), h('span', {}, v)]).flat()),
         h('h4', {}, 'モード'),
         h('ul', {},
-          h('li', {}, 'フリーフライト: 自由に飛ぶ。滑走路・着陸エリアに降りると評価'),
+          h('li', {}, 'フリー: 自由に飛ぶ・走る。飛行機は滑走路・着陸エリアに降りると評価'),
           h('li', {}, 'リングコース: 番号順にリングをくぐるタイムアタック。画面の円（緑＝このままで通れる）と距離・秒数を目安に。外すと +5 秒'),
           h('li', {}, '射撃: 風船・地上の的・敵機（3 波）を撃ち落とす。武器の無い機体は風船に体当たり。全部倒すとクリア（早いほどボーナス）。パラグライダーなど飛び直せない機体は、着地した時点の点数で終了。難易度は設定で変えられます'),
-          h('li', {}, '着陸チャレンジ: 進入の途中から始まり、降下率・接地速度・精度で採点'),
+          h('li', {}, '着陸: 進入の途中から始まり、降下率・接地速度・精度で採点。緑の線が中心に来るように飛ぶと、ちょうどよい進入コース'),
+          h('li', {}, 'レース（車）: ライバル 3 台と周回。緑のゲートを順に通る。順位とタイムが記録される'),
+          h('li', {}, 'ドリフト（車）: 90 秒で点数を稼ぐ。滑る角度と速さで点が入り、続けると倍率が最大 ×5。切り返しは 1.2 秒以内ならつながる。ぶつかると確定前の点は消える'),
+          h('li', {}, '駐車（車）: 黄色い枠の中に止める。位置と向きの正確さ＋速さで採点'),
           h('li', {}, '2人で飛ぶ: タイトルの「👥 2人で飛ぶ」。同じ場所を一緒に飛び、リングで競争（遅い方の機体に合わせたコース）・射撃で撃ち合い（撃墜 +1000 点）。レーダーの下に通信の往復時間が出ます')),
+        h('h4', {}, '車の操作'),
+        h('ul', {},
+          h('li', {}, 'ハンドル: 傾き（スティック表示時はスティックの左右）。設定で ◀▶ ボタンにも変更可'),
+          h('li', {}, 'アクセル・ブレーキ: 右下のボタン（設定で「傾き」「自動」に変更可）。止まってからブレーキを押し続けるとバック'),
+          h('li', {}, 'ドリフト: 曲がりながら左の「サイド」を一瞬押して滑り出す → アクセルを踏んだまま傾きで角度を調整 → 傾きを戻すと収まる'),
+          h('li', {}, 'ニトロ: 押している間だけ加速。ドリフト中によくたまる'),
+          h('li', {}, '復帰: 立ち往生したら少し前の場所へ戻る。水に落ちても自動で戻る（壁にぶつかっても墜落しない）'),
+          h('li', {}, '路面: 舗装＞ダート＞草地＞砂＞雪＞氷の順に滑りやすい。雨・雪の日はさらに滑る')),
+        h('h4', {}, '便利な機能'),
+        h('ul', {},
+          h('li', {}, 'AP（右上）: オートパイロット。今の高度と方位を保つ（操作を大きく入れると解除）'),
+          h('li', {}, '🎓 練習: 実際に操作しながら一歩ずつ覚える（飛行機・ヘリ・車・ドリフト）'),
+          h('li', {}, '📅 今日のチャレンジ: 毎日変わる機体と条件で腕試し'),
+          h('li', {}, '🎬 リプレイ: 結果画面から今の走りを見直せる。📷 写真: 一時停止メニューから'),
+          h('li', {}, '🏆 記録: 実績と累計の記録')),
         h('h4', {}, '設定'),
         h('ul', {},
           h('li', {}, '左利き配置: スティック・機体ボタンを右、スロットル・射撃ボタンを左に入れ替え'),
@@ -372,13 +465,13 @@ export class Screens {
       content.append(
         h('div', { class: 'guide-head' }, h('div', { class: 'guide-icon', html: ICONS[id] || '' }), h('div', {}, h('h3', {}, v.name), h('p', { class: 'muted' }, v.desc))),
         h('h4', {}, '傾き'), h('p', {}, g.tilt || ''),
-        h('h4', {}, 'スロットル（右手）'), h('p', {}, g.throttle || '—'),
+        h('h4', {}, v.model === 'car' ? 'アクセル・ブレーキ（右手）' : 'スロットル（右手）'), h('p', {}, g.throttle || '—'),
         h('h4', {}, '機体ボタン（左手）'),
         v.buttons.length
           ? h('div', { class: 'stat-grid guide-grid' }, ...v.buttons.map((b) => [h('span', { class: 'k btnlabel' }, b.label), h('span', {}, `${b.desc || ''}${b.type === 'hold' ? '（押している間）' : ''}`)]).flat())
           : h('p', {}, 'なし'),
-        h('h4', {}, '射撃モード'),
-        h('p', {}, v.weapon ? `${v.weapon.name}（毎秒 ${v.weapon.rate} 発・${v.weapon.ammo} 発）${v.weapon.missiles ? `。追尾ミサイル ${v.weapon.missiles} 発: 敵を正面の円に約 ${v.weapon.lockTime} 秒入れ続けるとロックオン → 「ミサイル」` : ''}` : '武器なし。風船に体当たりして割る'),
+        v.model === 'car' ? null : h('h4', {}, '射撃モード'),
+        v.model === 'car' ? null : h('p', {}, v.weapon ? `${v.weapon.name}（毎秒 ${v.weapon.rate} 発・${v.weapon.ammo} 発）${v.weapon.missiles ? `。追尾ミサイル ${v.weapon.missiles} 発: 敵を正面の円に約 ${v.weapon.lockTime} 秒入れ続けるとロックオン → 「ミサイル」` : ''}` : '武器なし。風船に体当たりして割る'),
         h('h4', {}, 'コツ'), h('ul', {}, ...(g.tips || []).map((t) => h('li', {}, t))),
       );
     };
@@ -401,6 +494,75 @@ export class Screens {
     );
     select(vehicleId);
     this.show('guide');
+  }
+
+  // ---------- 記録 ----------
+  showRecords(progress) {
+    const el = this.el.records;
+    el.innerHTML = '';
+    const s = progress.stats;
+    const stat = (k, v) => [h('span', { class: 'k' }, k), h('span', {}, v)];
+    el.append(
+      h('div', { class: 'screen-head' },
+        tapButton('← 戻る', () => this.show('title'), 'btn small', { id: 'btn-records-back' }),
+        h('h2', {}, `記録と実績（${progress.count()} / ${ACHIEVEMENTS.length}）`)),
+      h('div', { class: 'guide-body' },
+        h('div', { class: 'guide-content' },
+          h('h4', {}, '実績'),
+          h('div', { class: 'ach-grid' }, ACHIEVEMENTS.map((a) => h('div', { class: `ach${progress.unlocked[a.id] ? ' on' : ''}`, 'data-ach': a.id },
+            h('div', { class: 'ach-name' }, `${progress.unlocked[a.id] ? '🏆' : '🔒'} ${a.name}`), h('div', { class: 'ach-desc' }, a.desc)))),
+          h('h4', {}, '累計'),
+          h('div', { class: 'stat-grid' },
+            ...stat('飛行時間', `${Math.round(s.flightMinutes)} 分`),
+            ...stat('走行時間', `${Math.round(s.driveMinutes)} 分`),
+            ...stat('移動距離', `${s.distanceKm.toFixed(1)} km`),
+            ...stat('着陸', `${s.landings} 回（S 評価 ${s.landingS} 回）`),
+            ...stat('リング', `${s.rings} 個`),
+            ...stat('撃墜', `${s.kills} 機`),
+            ...stat('ドリフト', `最高 ${s.driftBest.toLocaleString()} 点 ／ 合計 ${s.driftTotal.toLocaleString()} 点`),
+            ...stat('レース', `${s.races} 回（優勝 ${s.raceWins} 回）`),
+            ...stat('乗った機体', `${s.vehicles.length} / ${VEHICLE_ORDER.length}`),
+            ...stat('墜落', `${s.crashes} 回`)))),
+    );
+    this.show('records');
+  }
+
+  // ---------- 練習 ----------
+  showLessons() {
+    const el = this.el.lessons;
+    el.innerHTML = '';
+    const done = this.cb.lessonsDone ? this.cb.lessonsDone() : [];
+    el.append(
+      h('div', { class: 'screen-head' },
+        tapButton('← 戻る', () => this.show('title'), 'btn small', { id: 'btn-lessons-back' }),
+        h('h2', {}, '練習（操作しながら覚える）')),
+      h('div', { class: 'lesson-grid' }, LESSONS.map((l) => tapButton('', () => this.cb.onLesson(l.id), 'lesson-card', { 'data-lesson': l.id }))),
+    );
+    el.querySelectorAll('.lesson-card').forEach((b, i) => {
+      const l = LESSONS[i];
+      b.append(h('div', { html: ICONS[l.vehicle] || '' }), h('div', { class: 'name' }, `${done.includes(l.id) ? '✓ ' : ''}${l.name}`), h('div', { class: 'desc' }, l.desc));
+    });
+    this.show('lessons');
+  }
+
+  // ---------- 今日のチャレンジ ----------
+  showDaily(ch, best, onStart) {
+    const el = this.el.daily;
+    el.innerHTML = '';
+    const v = VEHICLES[ch.vehicle];
+    el.append(h('div', { class: 'panel col center', style: { gap: '10px', minWidth: '420px' } },
+      h('h2', { style: { margin: '0' } }, `今日のチャレンジ（${ch.key}）`),
+      h('div', { html: ICONS[ch.vehicle] || '', style: { width: '160px' } }),
+      h('div', { class: 'stat-grid' },
+        h('span', { class: 'k' }, '機体'), h('span', { id: 'daily-vehicle' }, v.short),
+        h('span', { class: 'k' }, '場所'), h('span', {}, LOCATIONS[ch.location].name),
+        h('span', { class: 'k' }, 'モード'), h('span', {}, MODES[ch.mode].name),
+        h('span', { class: 'k' }, '条件'), h('span', {}, `${TIMES[ch.time].name}・${WEATHERS[ch.weather].name}`),
+        h('span', { class: 'k' }, '今日のベスト'), h('span', { id: 'daily-best' }, best != null ? `${best.toLocaleString()} 点` : '—')),
+      h('div', { class: 'row' },
+        tapButton('← 戻る', () => this.show('title'), 'btn small', { id: 'btn-daily-back' }),
+        tapButton('挑戦する ▶', onStart, 'btn primary', { id: 'btn-daily-start' }))));
+    this.show('daily');
   }
 
   // ---------- 2 人プレイ ----------
@@ -475,7 +637,8 @@ export class Screens {
       h('div', { class: 'row' },
         tapButton('↺ リトライ', cb.retry, 'btn primary', { id: 'btn-retry' }),
         tapButton('✈ 機体変更', cb.vehicle, 'btn', { id: 'btn-crash-vehicle' }),
-        tapButton('🗺 ロケーション', cb.location, 'btn', { id: 'btn-crash-location' }))));
+        tapButton('🗺 ロケーション', cb.location, 'btn', { id: 'btn-crash-location' }),
+        cb.replay ? tapButton('🎬 リプレイ', cb.replay, 'btn', { id: 'btn-crash-replay' }) : null)));
     this.show('crash');
   }
 
@@ -500,6 +663,37 @@ export class Screens {
         h('div', { class: 'col', style: { gap: '8px' } },
           h('div', { style: { fontSize: '22px', fontWeight: '800' } }, `スコア ${res.score}`),
           h('div', { class: 'stat-grid' }, rows.map(([k, v]) => [h('span', { class: 'k' }, k), h('span', {}, v)]))));
+    } else if (res.type === 'race') {
+      title = res.place === 1 ? '優勝！' : `${res.place} 位でゴール`;
+      body = h('div', { class: 'col center', style: { gap: '6px' } },
+        h('div', { style: { fontSize: '44px', fontWeight: '900' }, id: 'result-time' }, fmtTime(res.time)),
+        h('div', { class: 'stat-grid' },
+          h('span', { class: 'k' }, '順位'), h('span', {}, `${res.place} / ${res.cars}`),
+          h('span', { class: 'k' }, 'ベストラップ'), h('span', {}, fmtTime(res.bestLap)),
+          h('span', { class: 'k' }, '自己ベスト'), h('span', {}, res.best != null ? fmtTime(res.best) : '—'),
+          res.opponent ? h('span', { class: 'k' }, '相手') : null, res.opponent ? h('span', {}, res.opponent) : null),
+        res.newBest ? h('div', { style: { color: '#ffd84a', fontWeight: '800' } }, '自己ベスト更新！') : null);
+    } else if (res.type === 'drift') {
+      title = 'タイムアップ！';
+      body = h('div', { class: 'row', style: { gap: '28px', alignItems: 'center' } },
+        h('div', { class: 'col center' }, h('div', { class: `result-grade grade-${res.grade}`, id: 'result-grade' }, res.grade)),
+        h('div', { class: 'col', style: { gap: '6px' } },
+          h('div', { style: { fontSize: '32px', fontWeight: '900' }, id: 'result-score' }, `${res.score.toLocaleString()} 点`),
+          h('div', { class: 'stat-grid' },
+            h('span', { class: 'k' }, '1 回の最高'), h('span', {}, `${res.bestRun.toLocaleString()} 点`),
+            h('span', { class: 'k' }, '自己ベスト'), h('span', {}, res.best != null ? `${res.best.toLocaleString()} 点` : '—')),
+          res.newBest ? h('div', { style: { color: '#ffd84a', fontWeight: '800' } }, '新記録！') : null));
+    } else if (res.type === 'parking') {
+      title = '駐車完了！';
+      body = h('div', { class: 'row', style: { gap: '28px', alignItems: 'center' } },
+        h('div', { class: 'col center' }, h('div', { class: `result-grade grade-${res.grade}`, id: 'result-grade' }, res.grade)),
+        h('div', { class: 'col', style: { gap: '6px' } },
+          h('div', { style: { fontSize: '30px', fontWeight: '900' }, id: 'result-score' }, `${res.score} 点`),
+          h('div', { class: 'stat-grid' },
+            h('span', { class: 'k' }, 'タイム'), h('span', {}, fmtTime(res.time)),
+            h('span', { class: 'k' }, '各枠の点'), h('span', {}, res.scores.join(' / ')),
+            h('span', { class: 'k' }, '自己ベスト'), h('span', {}, res.best != null ? `${res.best} 点` : '—')),
+          res.newBest ? h('div', { style: { color: '#ffd84a', fontWeight: '800' } }, '新記録！') : null));
     } else if (res.type === 'combat') {
       title = res.partial ? '着地 — ここで終了' : '全目標クリア！';
       const acc = res.shots ? Math.round((res.hits / res.shots) * 100) : null;
@@ -533,6 +727,7 @@ export class Screens {
         tapButton('↺ もう一度', cb.retry, 'btn primary', { id: 'btn-result-retry' }),
         tapButton('✈ 機体変更', cb.vehicle, 'btn', { id: 'btn-result-vehicle' }),
         tapButton('🗺 ロケーション', cb.location, 'btn', { id: 'btn-result-location' }),
+        cb.replay ? tapButton('🎬 リプレイ', cb.replay, 'btn', { id: 'btn-result-replay' }) : null,
         cb.share ? tapButton('共有', cb.share, 'btn', { id: 'btn-result-share' }) : null)));
     this.show('result');
   }

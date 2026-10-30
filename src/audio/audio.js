@@ -158,6 +158,21 @@ export class AudioEngine {
         e.rumble = this._noiseChain('lowpass', 160, 0.7);
         break;
       }
+      case 'car': {
+        // エンジン: のこぎり波 2 本（少しずらしてうなり）を低域に通す。回転数で高さが変わる
+        e.osc1 = this._osc('sawtooth', s.idle, 0);
+        e.osc2 = this._osc('square', s.idle * 0.5, 0);
+        e.lp = ctx.createBiquadFilter();
+        e.lp.type = 'lowpass';
+        e.lp.frequency.value = 500;
+        e.osc1.g.disconnect();
+        e.osc2.g.disconnect();
+        e.osc1.g.connect(e.lp);
+        e.osc2.g.connect(e.lp);
+        e.lp.connect(this.master);
+        e.roar = this._noiseChain('lowpass', 300, 0.5); // 路面の音
+        break;
+      }
       case 'balloon': {
         e.roar = this._noiseChain('bandpass', 350, 0.6);
         e.rumble = this._noiseChain('lowpass', 90, 0.7);
@@ -185,6 +200,8 @@ export class AudioEngine {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     if (this.wind) this.wind.g.gain.setTargetAtTime(0, t, 0.05);
+    if (this.squeal) { this.squeal.g.gain.setTargetAtTime(0, t, 0.05); this.nitroSnd.g.gain.setTargetAtTime(0, t, 0.05); }
+    if (this.rainSnd) this.rainSnd.g.gain.setTargetAtTime(0, t, 0.05);
     this.stopEngine();
   }
 
@@ -265,6 +282,18 @@ export class AudioEngine {
           e.rumble.g.gain.setTargetAtTime(on * (flying ? 0 : spd * 0.15), t, tc);
           break;
         }
+        case 'car': {
+          const rpm = state.car ? clamp(state.car.rpm, 0, 1.05) : 0;
+          const gas = state.car ? state.car.gas : 0;
+          const f = s.idle + (s.max - s.idle) * rpm;
+          e.osc1.o.frequency.setTargetAtTime(f, t, 0.03);
+          e.osc2.o.frequency.setTargetAtTime(f * 0.5, t, 0.03);
+          e.osc1.g.gain.setTargetAtTime(on * (0.05 + 0.1 * gas + 0.03 * rpm), t, tc);
+          e.osc2.g.gain.setTargetAtTime(on * (0.05 + 0.07 * gas), t, tc);
+          e.lp.frequency.setTargetAtTime(300 + (900 + 1800 * s.tone) * (0.25 + 0.75 * gas) * (0.5 + rpm), t, tc);
+          e.roar.g.gain.setTargetAtTime(on * clamp(spd / 70, 0, 1) * 0.16, t, 0.1);
+          break;
+        }
         case 'balloon': {
           const b = vs.burner ?? 0;
           e.roar.g.gain.setTargetAtTime(on * b * 0.45, t, 0.05);
@@ -281,6 +310,23 @@ export class AudioEngine {
         default:
       }
     }
+
+    // タイヤのスキール音・ニトロ（車）
+    if (state.car && (state.carMode == null || state.carMode === 'drive')) {
+      if (!this.squeal) { this.squeal = this._noiseChain('bandpass', 1400, 6); this.nitroSnd = this._noiseChain('bandpass', 900, 1.2); }
+      const hard = state.car.surface === 'asphalt' || state.car.surface === 'concrete';
+      const sl = active && !state.car.air && hard && !def.p.drive.hover ? clamp((state.car.slip - 0.14) * 3.2, 0, 1) * clamp(spd / 12, 0, 1) : 0;
+      this.squeal.g.gain.setTargetAtTime(sl * 0.2, t, 0.05);
+      this.squeal.f.frequency.setTargetAtTime(1100 + sl * 700 + Math.min(spd, 60) * 6, t, 0.05);
+      this.nitroSnd.g.gain.setTargetAtTime(active && state.car.nitroOn ? 0.3 : 0, t, 0.06);
+    } else if (this.squeal) {
+      this.squeal.g.gain.setTargetAtTime(0, t, 0.05);
+      this.nitroSnd.g.gain.setTargetAtTime(0, t, 0.05);
+    }
+    // 雨音
+    const rainOn = active && state.precip === 'rain';
+    if (rainOn && !this.rainSnd) this.rainSnd = this._noiseChain('highpass', 2500, 0.3);
+    if (this.rainSnd) this.rainSnd.g.gain.setTargetAtTime(rainOn ? 0.07 : 0, t, 0.3);
 
     // 射撃音（撃っている間、発射レートで断続するノイズ）
     const firing = active && state.input && state.input.fire && state.combat && state.combat.armed && state.combat.ammo > 0;
@@ -393,6 +439,34 @@ export class AudioEngine {
         break;
       case 'canopy':
         this._burst(300, 0.35, 0.5);
+        break;
+      case 'carHit':
+        this._burst(260, 0.25, Math.min(0.8, 0.2 + (ev.impact || 0) * 0.03));
+        break;
+      case 'cone':
+        this._burst(1400, 0.1, 0.25, 'bandpass');
+        break;
+      case 'shift':
+        this._burst(600, 0.07, 0.08, 'bandpass');
+        break;
+      case 'nitro':
+        this._burst(1100, 0.5, 0.4, 'bandpass');
+        break;
+      case 'driftEnd':
+        this._beep(990, 0.1, 'triangle', 0.14);
+        setTimeout(() => this.ctx && this._beep(1320, 0.14, 'triangle', 0.12), 90);
+        break;
+      case 'countdown':
+        this._beep(ev.n > 0 ? 660 : 1100, ev.n > 0 ? 0.18 : 0.5, 'square', 0.12);
+        break;
+      case 'checkpoint':
+        this._beep(880, 0.08, 'sine', 0.12);
+        break;
+      case 'lap':
+        [880, 1100].forEach((f, i) => setTimeout(() => this.ctx && this._beep(f, 0.14, 'triangle', 0.14), i * 100));
+        break;
+      case 'parked':
+        this._beep(1000, 0.2, 'triangle', 0.14);
         break;
       case 'courseFinished':
       case 'result':

@@ -163,7 +163,8 @@ test('早送り: 熱気球・滑空機の自由飛行だけ。押すたびに ×
   await openApp(page);
   await page.evaluate(() => window.__flight.loadScenario('prop', 'island', {}));
   await expect(page.locator('#btn-warp')).toBeHidden();
-  await page.evaluate(() => window.__flight.loadScenario('balloon', 'island', { mode: 'rings' }));
+  // タイムを競うモードでは使えない（熱気球はリングを選べないので、滑空機で確認）
+  await page.evaluate(() => window.__flight.loadScenario('sailplane', 'island', { mode: 'rings' }));
   await expect(page.locator('#btn-warp')).toBeHidden();
   await page.evaluate(() => window.__flight.loadScenario('balloon', 'island', { realtime: true, calm: true, spawn: { pos: { x: 0, y: 900, z: 3000 }, heading: 0, speed: 0 } }));
   await expect(page.locator('#btn-warp')).toBeVisible();

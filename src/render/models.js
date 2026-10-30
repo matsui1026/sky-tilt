@@ -3,8 +3,9 @@
 // 座標系: 前方 -z, 上 +y, 右 +x（sim と同じ）
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { buildCarModel } from './carModels.js';
 
-const MAT = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+export const MAT = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
 
 function colorize(geo, hex) {
   let g = geo.index ? geo.toNonIndexed() : geo;
@@ -18,7 +19,7 @@ function colorize(geo, hex) {
 }
 
 /** パーツを作って配置 */
-function P(geo, hex, { pos = [0, 0, 0], rot = [0, 0, 0], scale = [1, 1, 1] } = {}) {
+export function P(geo, hex, { pos = [0, 0, 0], rot = [0, 0, 0], scale = [1, 1, 1] } = {}) {
   const m = new THREE.Matrix4().compose(
     new THREE.Vector3(...pos),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(...rot)),
@@ -29,11 +30,11 @@ function P(geo, hex, { pos = [0, 0, 0], rot = [0, 0, 0], scale = [1, 1, 1] } = {
   return colorize(g, hex);
 }
 
-const box = (x, y, z) => new THREE.BoxGeometry(x, y, z);
+export const box = (x, y, z) => new THREE.BoxGeometry(x, y, z);
 /** z 軸方向の円柱（rf: 前側半径, rb: 後側半径） */
-const cylZ = (rf, rb, len, seg = 12) => new THREE.CylinderGeometry(rf, rb, len, seg).rotateX(-Math.PI / 2);
-const cylX = (r, len, seg = 10) => new THREE.CylinderGeometry(r, r, len, seg).rotateZ(Math.PI / 2);
-const sphere = (r, w = 12, h = 8) => new THREE.SphereGeometry(r, w, h);
+export const cylZ = (rf, rb, len, seg = 12) => new THREE.CylinderGeometry(rf, rb, len, seg).rotateX(-Math.PI / 2);
+export const cylX = (r, len, seg = 10) => new THREE.CylinderGeometry(r, r, len, seg).rotateZ(Math.PI / 2);
+export const sphere = (r, w = 12, h = 8) => new THREE.SphereGeometry(r, w, h);
 
 /** 後退翼（右翼）。root を原点、+x 方向に span */
 function sweptWing(span, rootChord, tipChord, thick, sweepDeg, dihedralDeg = 0) {
@@ -79,7 +80,7 @@ function deltaWing(points, thick) {
   return g;
 }
 
-function merged(parts) {
+export function merged(parts) {
   const g = mergeGeometries(parts, false);
   g.computeBoundingSphere();
   const mesh = new THREE.Mesh(g, MAT);
@@ -438,8 +439,8 @@ function buildDrone() {
 }
 
 // ---------------- 空飛ぶスポーツカー（オリジナルデザイン） ----------------
-function buildFlycar() {
-  const R = 0xc8102e, D = 0x1a1f26, G = 0x8a929c, L = 0xfff2c0, T = 0xff3030;
+function buildFlycar(paint) {
+  const R = paint ?? 0xc8102e, D = 0x1a1f26, G = 0x8a929c, L = 0xfff2c0, T = 0xff3030;
   const parts = [
     P(box(1.9, 0.42, 4.3), R, { pos: [0, 0.02, 0] }),
     P(box(1.86, 0.16, 1.5), R, { pos: [0, 0.26, -1.45], rot: [0.16, 0, 0] }),
@@ -533,7 +534,9 @@ function buildBalloon() {
   };
 }
 
-export function buildVehicleModel(def) {
+/** opts: { paint（車の塗り色）, night（ヘッドライト） } */
+export function buildVehicleModel(def, opts = {}) {
+  if (def.model === 'car') return buildCarModel(def, opts);
   switch (def.id) {
     case 'prop': return buildProp();
     case 'airliner': return buildAirliner();
@@ -541,7 +544,7 @@ export function buildVehicleModel(def) {
     case 'sailplane': return buildSailplane();
     case 'heli': return buildHeli();
     case 'drone': return buildDrone();
-    case 'flycar': return buildFlycar();
+    case 'flycar': return buildFlycar(opts.paint);
     case 'balloon': return buildBalloon();
     case 'paraglider': return buildParaglider();
     case 'jetsuit': return buildJetsuit();

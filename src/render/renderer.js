@@ -6,7 +6,8 @@ import { buildClouds } from './clouds.js';
 import { buildVehicleModel } from './models.js';
 import { createSpeedLines, createRings, createShadow, CameraRig } from './effects.js';
 import { createCombatView } from './combatView.js';
-import { clamp } from '../sim/math.js';
+import { createTrackView, createPrecip } from './trackView.js';
+import { clamp, attitudeOf } from '../sim/math.js';
 import { getVehicle } from '../data/vehicles.js';
 
 export const MAX_DPR = 2;
@@ -68,7 +69,8 @@ export class FlightRenderer {
   }
 
   /** ワールドと機体を構築（前回分は破棄） */
-  load(world, def, rings, mode = 'free', combat = null) {
+  /** opts: { paint, race（sim.race。ライバルを描く） } */
+  load(world, def, rings, mode = 'free', combat = null, opts = {}) {
     this.disposeScene();
     const scene = new THREE.Scene();
     this.scene = scene;
@@ -79,12 +81,31 @@ export class FlightRenderer {
     scene.add(this.terrain.group);
     this.clouds = buildClouds(world, this.sky.params);
     scene.add(this.clouds.mesh);
-    this.model = buildVehicleModel(def);
+    const nightish = world.time.id === 'night' || world.time.id === 'evening';
+    this.model = buildVehicleModel(def, { paint: opts.paint, night: nightish });
     scene.add(this.model.root);
     this.shadow = createShadow();
     scene.add(this.shadow);
     this.rings = rings && rings.length ? createRings(rings, world) : null;
     if (this.rings) scene.add(this.rings.group);
+    // 車: コース・スモーク・ライバル
+    this.trackView = null;
+    this.simRace = opts.race || null;
+    if (def.category === 'car') {
+      this.trackView = createTrackView(world, def, { race: mode === 'race', parking: mode === 'parking' });
+      scene.add(this.trackView.group);
+      if (opts.race) {
+        const base = def.model === 'car' ? def : getVehicle('driftcar');
+        for (const r of opts.race.rivals) {
+          const m = buildVehicleModel(base, { paint: r.paint, night: nightish });
+          m.cg = base.p.cgHeight;
+          this.trackView.addRival(m);
+        }
+      }
+    }
+    // 雨・雪
+    this.precip = world.weather.precip ? createPrecip(world.weather.precip) : null;
+    if (this.precip) scene.add(this.precip.object);
     this.combatView = combat ? createCombatView(combat) : null;
     if (this.combatView) scene.add(this.combatView.group);
     this.speedLines = createSpeedLines();
@@ -95,7 +116,7 @@ export class FlightRenderer {
     this.terrain.lights.visible = night || dusk;
     if (this.terrain.buildings) this.terrain.buildings.material.userData.night.value = night ? 1 : dusk ? 0.5 : 0;
     // 着陸ターゲットは人・ヘリ系と着陸チャレンジで表示
-    const showTarget = (def.model !== 'fixedwing' || mode === 'landing') && mode !== 'combat';
+    const showTarget = (def.model !== 'fixedwing' || mode === 'landing') && mode !== 'combat' && def.model !== 'car' && !['race', 'drift', 'parking'].includes(mode);
     this.terrain.target.visible = showTarget;
     this.baseFog = scene.fog.density;
     this.rig.setMode(this.rig.mode);
@@ -186,6 +207,7 @@ export class FlightRenderer {
 
   combatEvent(ev) {
     if (this.combatView) this.combatView.event(ev);
+    if (this.trackView) this.trackView.event(ev);
   }
 
   /**
@@ -223,12 +245,14 @@ export class FlightRenderer {
     const att = state.attitude;
     const D2R = Math.PI / 180;
     const flightPath = Math.atan2(state.vs, Math.max(state.groundSpeed, 0.1));
-    const shakeBase = { prop: 0.0012, airliner: 0.0006, fighter: 0.0014, heli: 0.0022, jetsuit: 0.002, drone: 0.0008, flycar: 0.0012 }[this.def.id] || 0;
+    const shakeBase = { prop: 0.0012, airliner: 0.0006, fighter: 0.0014, heli: 0.0022, jetsuit: 0.002, drone: 0.0008, flycar: 0.0012 }[this.def.id] || (this.def.model === 'car' ? 0.0006 : 0);
     const turb = this.world.turbulence * 0.0012 * clamp(state.speed / 60, 0, 1);
-    const shake = state.onGround ? shakeBase * 0.5 + clamp(state.groundSpeed / 60, 0, 1) * 0.002 : shakeBase * (state.throttle ?? 0) + turb + (state.ab ? 0.0015 : 0);
+    const rough = state.car && ['dirt', 'sand', 'rock', 'grass', 'park', 'snow'].includes(state.car.surface) ? 0.0035 : 0;
+    const shake = state.onGround ? shakeBase * 0.5 + clamp(state.groundSpeed / 60, 0, 1) * (0.002 + rough) : shakeBase * (state.throttle ?? 0) + turb + (state.ab ? 0.0015 : 0);
     this.rig.update(dt, this.def, vq, vp, {
       heading: att.heading * D2R, pitch: att.pitch * D2R, roll: att.roll * D2R, flightPath,
       speed: state.speed, ab: state.ab, shake, ground, phase: state.phase, carMode: state.carMode,
+      beta: state.car ? (state.car.beta * D2R) : 0, nitro: state.car ? state.car.nitroOn : false,
     });
     this.sky.follow(this.camera.position);
 
@@ -238,15 +262,100 @@ export class FlightRenderer {
     this.scene.fog.density = this.baseFog * (1 + this.cloudDensity * 60);
 
     // スピードライン
-    const sl = clamp((state.speed - 45) / 160, 0, 1) * (state.onGround ? 0.3 : 1);
+    const sl = state.car && state.onGround
+      ? clamp((state.speed - 30) / 70, 0, 1) * 0.35 + (state.car.nitroOn ? 0.5 : 0)
+      : clamp((state.speed - 45) / 160, 0, 1) * (state.onGround ? 0.3 : 1);
     this.speedLines.update(dt, state.speed, sl);
 
     if (this.rings) this.rings.update(state, this.t);
     if (this.combatView) this.combatView.update(dt, this.t);
+    if (this.trackView) this.trackView.update(state, vs, dt, this.simRace);
+    if (this.precip) this.precip.update(dt, this.camera.position, state.vel);
     const beacon = this.terrain.target.getObjectByName('beacon');
     if (beacon) beacon.material.opacity = 0.12 + 0.1 * (0.5 + 0.5 * Math.sin(this.t * 2));
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** リプレイ: 記録した位置と姿勢で描く。style: 'chase' | 'external' | 'trackside' */
+  renderPose(dt, pos, q, vs, style) {
+    if (!this.scene) return;
+    this.t += dt;
+    const vp = this._vPos.set(pos.x, pos.y, pos.z);
+    const vq = this._vQ.set(q.x, q.y, q.z, q.w);
+    const m = this.model;
+    m.root.position.copy(vp);
+    m.root.quaternion.copy(vq);
+    m.update(vs, dt, this.t);
+    m.root.visible = true;
+    const terr = this.world.terrain;
+    const ground = Math.max(terr.surfaceAt(vp.x, vp.z), terr.roofAt(vp.x, vp.z));
+    const agl = vp.y - ground;
+    this.shadow.visible = agl < 220;
+    if (this.shadow.visible) {
+      const size = (m.root.userData.size || sizeOf(this.def)) * (1 + agl * 0.01);
+      this.shadow.position.set(vp.x, ground + 0.2, vp.z);
+      this.shadow.scale.set(size, 1, size);
+      this.shadow.material.opacity = clamp(1 - agl / 220, 0, 1);
+    }
+    if (style === 'trackside') {
+      // 少し先の地点に立って、通り過ぎるのを見る
+      const cam = this.camera;
+      if (!this._side || this._side.distanceTo(vp) > 90 + (m.root.userData.size || 8) * 6) {
+        const f = new THREE.Vector3(0, 0, -1).applyQuaternion(vq);
+        const r = new THREE.Vector3(1, 0, 0).applyQuaternion(vq);
+        const d = 30 + (vs.speed || 0) * 2.2;
+        this._side = vp.clone().addScaledVector(f, d).addScaledVector(r, 9 + (m.root.userData.size || 8));
+        const g = Math.max(terr.surfaceAt(this._side.x, this._side.z), terr.roofAt(this._side.x, this._side.z));
+        this._side.y = Math.max(this._side.y, g) + 1.8;
+      }
+      cam.position.copy(this._side);
+      cam.up.set(0, 1, 0);
+      cam.lookAt(vp);
+      cam.fov = 26;
+      cam.near = 0.5;
+      cam.updateProjectionMatrix();
+    } else {
+      this._side = null;
+      if (this.rig.mode !== style) this.rig.setMode(style);
+      const att = attitudeOf(q);
+      this.rig.update(dt, this.def, vq, vp, { heading: att.heading, pitch: att.pitch, roll: att.roll, flightPath: 0, speed: vs.speed || 0, shake: 0, ground, carMode: vs.carMode ?? 'drive' });
+    }
+    this.sky.follow(this.camera.position);
+    this.speedLines.update(dt, 0, 0);
+    if (this.precip) this.precip.update(dt, this.camera.position, null);
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  /** ライバルの表示（リプレイ中は隠す） */
+  setRivalsVisible(on) {
+    if (!this.trackView) return;
+    for (const m of this.trackView.rivals) m.root.visible = on;
+  }
+
+  /** 写真モード: 機体の周りを自由に回るカメラで描く */
+  renderOrbit(dt, target, yaw, pitch, dist) {
+    if (!this.scene) return;
+    this.t += dt;
+    const cam = this.camera;
+    const terr = this.world.terrain;
+    cam.position.set(target.x + Math.sin(yaw) * Math.cos(pitch) * dist, target.y + Math.sin(pitch) * dist, target.z + Math.cos(yaw) * Math.cos(pitch) * dist);
+    const g = Math.max(terr.surfaceAt(cam.position.x, cam.position.z), terr.roofAt(cam.position.x, cam.position.z));
+    if (cam.position.y < g + 0.6) cam.position.y = g + 0.6;
+    cam.up.set(0, 1, 0);
+    cam.lookAt(target.x, target.y, target.z);
+    cam.fov = 50;
+    cam.near = 0.3;
+    cam.updateProjectionMatrix();
+    this.model.root.visible = true;
+    this.sky.follow(cam.position);
+    this.speedLines.update(dt, 0, 0);
+    this.renderer.render(this.scene, cam);
+  }
+
+  /** 今の画面を PNG にする（描いた直後に呼ぶ） */
+  capture() {
+    return new Promise((res) => this.renderer.domElement.toBlob((b) => res(b), 'image/png'));
   }
 
   info() {
@@ -256,5 +365,5 @@ export class FlightRenderer {
 }
 
 function sizeOf(def) {
-  return { prop: 11, airliner: 36, fighter: 12, sailplane: 17, heli: 10, drone: 0.6, flycar: 5, balloon: 14, paraglider: 4, jetsuit: 2, wingsuit: 3, skydive: 2.5 }[def.id] || 5;
+  return { prop: 11, airliner: 36, fighter: 12, sailplane: 17, heli: 10, drone: 0.6, flycar: 5.5, balloon: 14, paraglider: 4, jetsuit: 2, wingsuit: 3, skydive: 2.5 }[def.id] || 5;
 }

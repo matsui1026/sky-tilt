@@ -12,7 +12,7 @@ export class GamepadInput {
     this.onAction = onAction;
     this.onUi = onUi;
     this.prev = [];
-    this.state = { active: false, pitch: 0, roll: 0, yaw: 0, throttleDelta: 0, fire: false, burner: false, vent: false };
+    this.state = { active: false, pitch: 0, roll: 0, yaw: 0, throttleDelta: 0, fire: false, burner: false, vent: false, gas: 0, brake: 0, handbrake: false, nitro: false };
     this.primaryAction = null; // 機体ボタン1 の id（B ボタン）
     this.primaryHold = false; // 機体ボタン1 が押し続ける種類か
     this.onHold = null;
@@ -20,7 +20,7 @@ export class GamepadInput {
 
   update() {
     const s = this.state;
-    s.active = false; s.pitch = 0; s.roll = 0; s.yaw = 0; s.throttleDelta = 0; s.fire = false; s.burner = false; s.vent = false;
+    s.active = false; s.pitch = 0; s.roll = 0; s.yaw = 0; s.throttleDelta = 0; s.fire = false; s.burner = false; s.vent = false; s.gas = 0; s.brake = 0; s.handbrake = false; s.nitro = false;
     if (typeof navigator === 'undefined' || !navigator.getGamepads) return s;
     let pads;
     try { pads = navigator.getGamepads(); } catch (e) { return s; }
@@ -36,6 +36,12 @@ export class GamepadInput {
     s.fire = btn(0) || btn(7);
     s.burner = btn(0) || btn(7);
     s.vent = btn(6);
+    // 車: RT/LT はアナログのペダル、A がサイド、X がニトロ
+    const val = (i) => (gp.buttons[i] ? gp.buttons[i].value || (gp.buttons[i].pressed ? 1 : 0) : 0);
+    s.gas = val(7);
+    s.brake = val(6);
+    s.handbrake = btn(0);
+    s.nitro = btn(2);
     s.active = Math.abs(s.roll) > 0 || Math.abs(s.pitch) > 0;
     if (this.primaryAction && this.primaryHold) {
       if (btn(1) !== !!this.prev[1] && this.onHold) this.onHold(this.primaryAction, btn(1));

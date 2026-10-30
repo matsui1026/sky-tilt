@@ -1,8 +1,9 @@
 // 空飛ぶスポーツカー: 走行モード（地面を走る車）と飛行モード（4 つのダクトファンで飛ぶ）を切り替える。
-// 走行: 駆動力・空気抵抗・転がり抵抗・坂の重力、前輪の舵角からヨーレート（横グリップ上限あり）。
+// 走行: car.js の車の物理を共有（タイヤの摩擦円・ドリフト・ジャンプ・壁で跳ね返る）。
 // 飛行: ドローンと同じ姿勢コマンド（傾けた方向に車体が傾き、推力の向きが変わる）。
-import { G0, DEG, clamp, approach, smoothstep, vadd, vsub, vscale, vlen, qrot, UP, quatFromAttitude } from '../math.js';
+import { G0, clamp, approach, smoothstep, vadd, vsub, vscale, vlen, qrot, UP, quatFromAttitude } from '../math.js';
 import { heliSurface, landingCheck } from './heli.js';
+import { createCarState, stepCarCore } from './car.js';
 
 export function flycarHoverThrottle(P, rho = 1.225) {
   return (P.mass * G0) / (P.fly.thrustMax * (rho / 1.225));
@@ -12,28 +13,27 @@ export function createFlycar(def, spawn) {
   const hd = spawn.heading || 0;
   const sp = spawn.speed || 0;
   const mode = spawn.onGround ? 'drive' : 'fly';
-  return {
+  const s = createCarState(def, spawn);
+  return Object.assign(s, {
     kind: 'flycar',
     mode,
-    pos: { ...spawn.pos },
-    vel: { x: Math.sin(hd) * sp, y: 0, z: -Math.cos(hd) * sp },
-    v: spawn.onGround ? sp : 0, // 走行中の前後速度
-    psi: hd, theta: 0, phi: 0, yawRate: 0, steer: 0,
-    q: quatFromAttitude(0, 0, hd),
+    vx: spawn.onGround ? sp : 0, // 走行中の前後速度
+    yawRate: 0,
     throttle: spawn.throttle ?? 0,
     fanRpm: mode === 'fly' ? 1 : 0,
     fuel: 1,
     onGround: !!spawn.onGround,
     touchdown: null, landedEmitted: false, airTime: spawn.onGround ? 0 : 99,
     g: 1, airspeed: sp, thrust: 0,
-  };
+    psi: hd,
+  });
 }
-
 /** モード切替。飛行 → 走行は接地中のみ */
 export function flycarToggleMode(def, s, env) {
   if (s.mode === 'drive') {
     s.mode = 'fly';
-    s.airborne = false;
+    s.air = false;
+    s.yawRate = s.r;
     env.emit('carMode', { mode: 'fly' });
     return 'fly';
   }
@@ -43,7 +43,10 @@ export function flycarToggleMode(def, s, env) {
   }
   // 走行へ: 車体の向きの前後速度を引き継ぐ
   const fh = { x: Math.sin(s.psi), z: -Math.cos(s.psi) };
-  s.v = s.vel.x * fh.x + s.vel.z * fh.z;
+  const rh = { x: -fh.z, z: fh.x };
+  s.vx = s.vel.x * fh.x + s.vel.z * fh.z;
+  s.vy = s.vel.x * rh.x + s.vel.z * rh.z;
+  s.r = 0;
   s.mode = 'drive';
   s.theta = 0; s.phi = 0;
   env.emit('carMode', { mode: 'drive' });
@@ -59,114 +62,20 @@ export function stepFlycar(def, s, ctl, env, dt) {
   s.fanRpm = approach(s.fanRpm, s.mode === 'fly' ? 1 : 0, 0.8, dt);
   s.fuel = Math.max(0, s.fuel - (s.throttle * (s.mode === 'fly' ? 1 : 0.2) / P.battery.burnTime) * dt);
   if (s.fuel <= 0 && !s.fuelOut) { s.fuelOut = true; env.emit('fuelout', {}); }
-  if (s.mode === 'drive') (s.airborne ? stepJump : stepDrive)(def, s, ctl, env, dt);
+  if (s.mode === 'drive') stepDrive(def, s, ctl, env, dt);
   else stepFly(def, s, ctl, env, dt);
   if (!s.crashed && !s.onGround && terr.buildingHit(s.pos, P.cgHeight * 0.9)) env.crash('ビルに衝突');
 }
 
+/** 走行は車と同じタイヤの物理（ドリフトもできる）。アクセルはスライダー、ブレーキは手前に傾ける */
 function stepDrive(def, s, ctl, env, dt) {
-  const P = def.p;
-  const D = P.drive;
-  const world = env.world;
-  const terr = world.terrain;
-  const m = P.mass;
-  const fh = { x: Math.sin(s.psi), z: -Math.cos(s.psi) };
-  const rh = { x: -fh.z, z: fh.x };
-  const g = terr.gradient(s.pos.x, s.pos.z, 2);
-  const slopeF = g.x * fh.x + g.z * fh.z;
-  const slopeR = g.x * rh.x + g.z * rh.z;
-  const pitch = Math.atan(slopeF);
-  const roll = -Math.atan(slopeR);
-  const rho = world.density(s.pos.y);
-  const v = s.v;
-  // アクセル・ブレーキ（手前に引く）・後退（止まってから手前に引き続ける）
-  // モーター: 低速では最大駆動力、高速では出力（パワー）で頭打ち
-  let F = s.throttle * Math.min(D.force, D.power / Math.max(Math.abs(v), 1));
-  const pull = Math.max(0, ctl.pitch);
-  let brakeDecel = 0;
-  // 止まってからさらに 1 秒ブレーキを保つと後退（止まった瞬間にバックしないように）
-  if (pull > 0.3 && Math.abs(v) <= 0.5 && s.throttle < 0.05) s.stopT = (s.stopT || 0) + dt; else if (pull <= 0.3 || v > 0.5) s.stopT = 0;
-  if (pull > 0.1 && v > 0.5) brakeDecel = pull * D.brake;
-  else if (s.stopT > 1.0) F = -pull * D.reverse;
-  if (ctl.throttle < 0.03 && pull <= 0.1) brakeDecel += Math.abs(v) < 1 ? 3 : 0.4; // エンジンブレーキ・停止保持
-  if (pull > 0.1 && v > -0.5 && s.stopT <= 1.0) brakeDecel = Math.max(brakeDecel, Math.abs(v) < 0.6 ? 6 : 0); // 停止中はその場に保持
-  const drag = 0.5 * rho * D.CdA * v * Math.abs(v);
-  let a = (F - drag) / m - D.rolling * G0 * Math.sign(v) - G0 * Math.sin(pitch);
-  let nv = v + a * dt;
-  if (brakeDecel > 0) {
-    const dv = Math.min(Math.abs(nv), brakeDecel * dt);
-    nv -= Math.sign(nv) * dv;
-  }
-  s.v = nv;
-  // ステアリング（速度が上がるほど切れ角を小さく）
-  const steerT = ctl.roll * D.maxSteer / (1 + Math.abs(nv) / 25);
-  s.steer = approach(s.steer, steerT, 0.12, dt);
-  let r = (nv / D.wheelBase) * Math.tan(s.steer);
-  const rMax = D.gripLat / Math.max(Math.abs(nv), 1);
-  r = clamp(r, -rMax, rMax);
-  s.yawRate = r;
-  s.psi += r * dt;
-  // 路面はビルの屋上も含む（屋上に着地してそのまま走れる）
-  const g0 = heliSurface(world, s.pos.x, s.pos.z);
-  const nx = s.pos.x + Math.sin(s.psi) * nv * dt;
-  const nz = s.pos.z - Math.cos(s.psi) * nv * dt;
-  const g1 = heliSurface(world, nx, nz);
-  const onRoof = terr.roofAt(nx, nz) >= terr.surfaceAt(nx, nz);
-  // 急斜面・水・ビルの壁（1 ステップで 0.6 m 以上の段差は壁）
-  const steep = !onRoof && Math.hypot(g.x, g.z) > Math.tan(32 * DEG);
-  if (!onRoof && terr.isWater(nx, nz)) { env.crash('水に突っ込みました'); return; }
-  const wall = g1 - g0 > 0.6;
-  if (wall || (steep && slopeF > 0 && nv > 0)) {
-    if (Math.abs(nv) > 12) { env.crash(steep ? '急斜面に激突' : 'ビルに激突'); return; }
-    s.v = 0;
-    // 押し付けている間ずっと出さない（2 秒に 1 回）
-    if (!(env.t - (s.noticeT ?? -9) < 2)) { s.noticeT = env.t; env.emit('notice', { text: '進めません' }); }
-    s.vel = { x: 0, y: 0, z: 0 };
-  } else {
-    const vyRoad = (g1 - g0) / dt;
-    // 路面の下がり方が重力で落ちるより急なら（屋上の縁・尾根の頂上）、タイヤが浮いて飛び出す
-    const needAy = (vyRoad - (s.vel.y || 0)) / dt;
-    if (g1 < g0 - 0.6 || (Math.abs(nv) > 8 && needAy < -G0)) {
-      s.pos = { x: nx, y: s.pos.y + (s.vel.y || 0) * dt, z: nz };
-      s.vel = { x: Math.sin(s.psi) * s.v, y: s.vel.y || 0, z: -Math.cos(s.psi) * s.v };
-      s.onGround = false;
-      s.airborne = true;
-      return;
-    }
-    s.pos = { x: nx, y: g1 + P.cgHeight, z: nz };
-    s.vel = { x: Math.sin(s.psi) * s.v, y: vyRoad, z: -Math.cos(s.psi) * s.v };
-  }
-  if (onRoof) { s.theta = 0; s.phi = 0; } else { s.theta = pitch; s.phi = roll; }
-  s.q = quatFromAttitude(s.theta, s.phi, s.psi);
-  s.onGround = true;
-  s.airspeed = Math.abs(s.v);
-  s.g = 1 + (Math.abs(s.v * r)) / G0;
-  s.thrust = F;
-}
-
-/** 走行中に段差・尾根から飛び出したとき: 放物線で落ちて、着地で走行に戻る（強く落ちたら墜落） */
-function stepJump(def, s, ctl, env, dt) {
-  const P = def.p;
-  const world = env.world;
-  const rho = world.density(s.pos.y);
-  const sp = vlen(s.vel);
-  const k = (0.5 * rho * P.drive.CdA * sp) / P.mass;
-  s.vel = { x: s.vel.x - s.vel.x * k * dt, y: s.vel.y - G0 * dt - s.vel.y * k * dt, z: s.vel.z - s.vel.z * k * dt };
-  s.pos = vadd(s.pos, vscale(s.vel, dt));
-  s.airspeed = sp;
-  s.g = 0;
-  s.q = quatFromAttitude(s.theta, s.phi, s.psi);
-  const g = heliSurface(world, s.pos.x, s.pos.z);
-  if (s.pos.y - P.cgHeight <= g) {
-    if (world.terrain.isWater(s.pos.x, s.pos.z) && world.terrain.roofAt(s.pos.x, s.pos.z) === -Infinity) { env.crash('水に突っ込みました'); return; }
-    if (s.vel.y < -P.landing.maxSink * 2) { env.crash(`落下の衝撃が大きすぎます（${(-s.vel.y).toFixed(1)} m/s）`); return; }
-    const vs = s.vel.y;
-    s.airborne = false;
-    s.onGround = true;
-    s.pos.y = g + P.cgHeight;
-    s.vel.y = 0;
-    env.emit('touchdown', { vs, speed: Math.abs(s.v) });
-  }
+  stepCarCore(def, s, {
+    steer: ctl.roll,
+    gas: Math.max(ctl.throttle, ctl.gas || 0),
+    brake: Math.max(ctl.pitch > 0.1 ? ctl.pitch : 0, ctl.brake || 0),
+    handbrake: !!ctl.handbrake,
+    nitro: false,
+  }, env, dt, { assist: env.carAssist, revDelay: 1.0, waterCrash: true, fallCrash: true });
 }
 function stepFly(def, s, ctl, env, dt) {
   const P = def.p;

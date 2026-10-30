@@ -1,10 +1,11 @@
 // PC デバッグ用キーボード操作
 // W/↑: 機首下げ  S/↓: 機首上げ  A/←, D/→: ロール  Q/E: ヨー  Shift/Ctrl: スロットル増減
 // F: フラップ  G: ギア  X: スポイラー  B: アフターバーナー  Space: パラシュート  T: 飛行⇄走行  C: カメラ  R: 再キャリブレーション  Esc/P: 一時停止
-// K / Enter: 射撃（押している間）  M: ミサイル  H: バーナー（押している間）  J: 排気弁（押している間）
+// K / Enter: 射撃（押している間）  M: ミサイル  H: バーナー（押している間）  J: 排気弁（押している間）  L: オートパイロット
+// 車: W/S アクセル・ブレーキ  A/D ハンドル  Space サイド  N ニトロ  V 復帰
 import { approach } from '../sim/math.js';
 
-const ACTION_KEYS = { KeyF: 'flaps', KeyG: 'gear', KeyX: 'spoiler', KeyB: 'ab', Space: 'deploy', KeyT: 'carMode', KeyM: 'missile' };
+const ACTION_KEYS = { KeyF: 'flaps', KeyG: 'gear', KeyX: 'spoiler', KeyB: 'ab', Space: 'deploy', KeyT: 'carMode', KeyM: 'missile', KeyV: 'reset', KeyL: 'autopilot' };
 const UI_KEYS = { KeyC: 'camera', KeyR: 'recalibrate', Escape: 'pause', KeyP: 'pause', KeyY: 'warp' };
 
 export class KeyboardInput {
@@ -46,5 +47,10 @@ export class KeyboardInput {
     this.fire = k.has('KeyK', 'Enter', 'NumpadEnter');
     this.burner = k.has('KeyH');
     this.vent = k.has('KeyJ');
+    // 車: W/S がペダル、Space がサイド、N がニトロ
+    this.gas = k.has('KeyW', 'ArrowUp');
+    this.brake = k.has('KeyS', 'ArrowDown');
+    this.handbrake = k.has('Space');
+    this.nitro = k.has('KeyN');
   }
 }

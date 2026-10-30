@@ -16,9 +16,24 @@ export class FlightControls {
     this.warp = h('button', { class: 'hbtn ctl', id: 'btn-warp', type: 'button', 'aria-label': '早送り' }, '▶×1');
     bindButton(this.warp, { id: 'warp', type: 'tap' }, { action: () => cb.onWarp && cb.onWarp() });
     this.vbuttons = h('div', { id: 'vbuttons' });
+    // 左右のハンドルボタン（設定で選択。傾きが苦手な人向け）
+    this.steerL = h('button', { class: 'hbtn ctl steer-btn', id: 'btn-steer-l', type: 'button', 'data-button': 'steerL' }, '◀');
+    this.steerR = h('button', { class: 'hbtn ctl steer-btn', id: 'btn-steer-r', type: 'button', 'data-button': 'steerR' }, '▶');
+    bindButton(this.steerL, { id: 'steerL', type: 'hold' }, { hold: (id, on) => cb.onHold(id, on) });
+    bindButton(this.steerR, { id: 'steerR', type: 'hold' }, { hold: (id, on) => cb.onHold(id, on) });
+    this.steerRow = h('div', { id: 'steer-row' }, this.steerL, this.steerR);
     this.stickKnob = h('div', { id: 'stick-knob' });
     this.stickEl = h('div', { id: 'stick', class: 'ctl' }, this.stickKnob, h('div', { id: 'stick-label' }, 'スティック'));
-    this.leftZone = h('div', { id: 'left-zone' }, this.vbuttons, this.stickEl);
+    this.leftZone = h('div', { id: 'left-zone' }, this.vbuttons, this.steerRow, this.stickEl);
+    // 車のペダル（右手）
+    this.gasBtn = h('button', { class: 'hbtn ctl pedal gas', id: 'btn-gas', type: 'button', 'data-button': 'gas' }, 'アクセル');
+    this.brakeBtn = h('button', { class: 'hbtn ctl pedal', id: 'btn-brake', type: 'button', 'data-button': 'brake' }, 'ブレーキ');
+    bindButton(this.gasBtn, { id: 'gas', type: 'hold' }, { hold: (id, on) => cb.onHold(id, on) });
+    bindButton(this.brakeBtn, { id: 'brake', type: 'hold' }, { hold: (id, on) => cb.onHold(id, on) });
+    this.pedalZone = h('div', { id: 'pedal-zone' }, this.brakeBtn, this.gasBtn);
+    // オートパイロット（水平飛行を保つ）
+    this.apBtn = h('button', { class: 'hbtn ctl', id: 'btn-ap', type: 'button', 'aria-label': 'オートパイロット' }, 'AP');
+    bindButton(this.apBtn, { id: 'autopilot', type: 'tap' }, { action: () => cb.onAction('autopilot') });
     this.thrFill = h('div', { id: 'throttle-fill' });
     this.thrKnob = h('div', { id: 'throttle-knob' }, '0%');
     this.thrLabel = h('div', { id: 'throttle-label' }, 'スロットル');
@@ -31,10 +46,11 @@ export class FlightControls {
     this.weaponZone = h('div', { id: 'weapon-zone' }, this.missileBtn, this.fireBtn);
     this.el.append(
       h('div', { id: 'top-left' }, this.pause, this.recal),
-      h('div', { id: 'top-right' }, this.warp, this.cam),
+      h('div', { id: 'top-right' }, this.warp, this.apBtn, this.cam),
       this.leftZone,
       this.weaponZone,
       this.thrEl,
+      this.pedalZone,
     );
     root.append(this.el);
     this.stick = new VirtualStick(this.stickEl, this.stickKnob);
@@ -50,7 +66,14 @@ export class FlightControls {
   }
 
   /** combat: 射撃モードなら武器ボタンを出す */
-  setVehicle(def, { combat = false, warp = false } = {}) {
+  /** car: { pedal, steer } は車の操作設定 */
+  setVehicle(def, { combat = false, warp = false, car = null } = {}) {
+    const isCar = def.model === 'car';
+    const pedal = car ? car.pedal : 'buttons';
+    this.pedalZone.style.display = isCar && pedal !== 'tilt' ? '' : 'none';
+    this.gasBtn.style.display = pedal === 'auto' ? 'none' : '';
+    this.apBtn.style.display = ['fixedwing', 'heli', 'flycar', 'jetsuit'].includes(def.model) ? '' : 'none';
+    this.steerRow.style.display = (isCar || def.model === 'flycar') && car && car.steer === 'buttons' ? '' : 'none';
     this.warp.style.display = warp ? '' : 'none';
     this.setWarp(1);
     this.vbuttons.innerHTML = '';
@@ -64,7 +87,7 @@ export class FlightControls {
       this.buttonEls[spec.id] = b;
       this.vbuttons.append(b);
     }
-    const noThrottle = def.model === 'paraglider' || def.model === 'human' || !!(def.p.thrust && def.p.thrust.type === 'none');
+    const noThrottle = isCar || def.model === 'paraglider' || def.model === 'human' || !!(def.p.thrust && def.p.thrust.type === 'none');
     this.thrEl.style.display = noThrottle ? 'none' : '';
     this.thrLabel.textContent = { heli: def.id === 'drone' ? '推力' : 'コレクティブ', jetsuit: '推力', balloon: 'バーナー', flycar: 'アクセル' }[def.model] || 'スロットル';
     const armed = combat && !!def.weapon;
@@ -101,7 +124,17 @@ export class FlightControls {
       b.carMode.innerHTML = `${fly ? '飛行中' : '走行中'}<span class="sub">押すと${fly ? '走行へ' : '飛行へ'}</span>`;
       // ヨーは飛行中だけ（走行中はハンドル）。場所は空けたままにして配置を動かさない
       for (const k of ['rudderL', 'rudderR']) if (b[k]) b[k].style.visibility = fly ? '' : 'hidden';
+      if (b.handbrake) b.handbrake.style.visibility = fly ? 'hidden' : '';
     }
+    if (st.car) {
+      const cr = st.car;
+      if (b.nitro) {
+        b.nitro.innerHTML = `ニトロ<span class="sub">${Math.round(cr.nitro * 100)}%</span>`;
+        b.nitro.classList.toggle('on', cr.nitroOn);
+      }
+      if (b.handbrake) b.handbrake.classList.toggle('on', cr.handbrake);
+    }
+    this.apBtn.classList.toggle('on', !!st.autopilot);
     if (st.combat) {
       const c = st.combat;
       if (c.armed) this.fireBtn.innerHTML = `${c.weaponName}<span class="sub">残 ${c.ammo}</span>`;

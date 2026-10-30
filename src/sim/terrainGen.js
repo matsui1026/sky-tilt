@@ -129,6 +129,27 @@ export const GENERATORS = {
     };
   },
 
+  // サーキット: 平らな高原（コースはこの上）と、周りを囲む丘
+  raceway(seed) {
+    const n1 = createNoise2D(seed);
+    const n2 = createNoise2D(seed + 21);
+    const BASE = 120;
+    return {
+      raw(x, z) {
+        const r = Math.hypot(x, z * 0.92);
+        const rim = smoothstep(1150, 2300, r);
+        return BASE + rim * (40 + 520 * Math.max(0, fbm(n1, x / 2200, z / 2200, 4) + 0.3)) + rim * 18 * fbm(n2, x / 300, z / 300, 2);
+      },
+      buildings() {
+        const list = [];
+        // メインストレートの観客席（左）とピットの建物（右）
+        for (let i = 0; i < 6; i++) list.push({ x: -44, z: -250 + i * 100, w: 14, d: 88, h: 9 + (i % 2) * 3, base: BASE - 1 });
+        for (let i = 0; i < 3; i++) list.push({ x: 48, z: -150 + i * 150, w: 18, d: 120, h: 6, base: BASE - 1 });
+        return list;
+      },
+    };
+  },
+
   snow(seed) {
     const n1 = createNoise2D(seed);
     const n2 = createNoise2D(seed + 13);

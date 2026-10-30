@@ -9,7 +9,7 @@ const PRESETS = {
   night: { top: 0x040818, horizon: 0x18213e, sun: 0x8ea6d8, sunI: 0.45, hemiSky: 0x2a3a66, hemiGround: 0x101018, hemiI: 0.35, fog: 0x141c34, stars: 1 },
 };
 
-const FOG = { clear: 0.000085, cloudy: 0.00019, windy: 0.00012 };
+const FOG = { clear: 0.000085, cloudy: 0.00019, windy: 0.00012, rain: 0.00042, snowfall: 0.00065, fog: 0.0017 };
 
 export function skyParams(timeId, weatherId) {
   const p = { ...PRESETS[timeId] || PRESETS.noon };
@@ -24,6 +24,17 @@ export function skyParams(timeId, weatherId) {
     p.sunI *= 0.45;
     p.hemiI *= 1.1;
     p.stars *= 0.2;
+  } else if (weatherId === 'rain' || weatherId === 'snowfall' || weatherId === 'fog') {
+    // 雨・雪・霧: 空は灰色、日差しは弱い（雪と霧は明るめの灰色）
+    const bright = weatherId === 'rain' ? 0.62 : 0.95;
+    const nightK = timeId === 'night' ? 0.18 : 1;
+    const gy = grey.clone().multiplyScalar(bright * nightK);
+    p.top.lerp(gy, 0.85);
+    p.horizon.lerp(gy, 0.9);
+    p.fog.lerp(gy, 0.92);
+    p.sunI *= weatherId === 'rain' ? 0.32 : 0.45;
+    p.hemiI *= weatherId === 'rain' ? 0.95 : 1.15;
+    p.stars = 0;
   } else if (weatherId === 'windy') {
     p.top.lerp(grey, 0.2);
     p.horizon.lerp(grey, 0.25);

@@ -12,6 +12,9 @@ const SCENARIOS = [
   { vehicle: 'heli', opts: { mode: 'landing', time: 'evening', weather: 'windy' }, camera: 'cockpit' },
   { vehicle: 'fighter', opts: { mode: 'combat', time: 'noon', weather: 'cloudy' }, camera: 'chase' },
   { vehicle: 'balloon', opts: { mode: 'free', time: 'morning', weather: 'clear' }, camera: 'external' },
+  // 車: ライバル 3 台・スモーク・コース・雨
+  { vehicle: 'driftcar', opts: { mode: 'race', time: 'night', weather: 'rain' }, camera: 'chase' },
+  { vehicle: 'monster', opts: { mode: 'drift', time: 'evening', weather: 'snowfall' }, camera: 'external' },
 ];
 
 test('全ロケーションの描画予算', async ({ page }) => {

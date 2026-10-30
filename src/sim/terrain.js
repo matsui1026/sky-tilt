@@ -1,6 +1,7 @@
 // 高さマップ地形（格子）。描画と当たり判定が同じ格子・同じ三角形分割を使う。
 import { GENERATORS, fieldMask, fieldLocal } from './terrainGen.js';
 import { lerp, clamp } from './math.js';
+import { Track, fieldCircuit } from './track.js';
 
 export const TERRAIN_SIZE = 12000; // 一辺 [m]（中心が原点）
 export const TERRAIN_SEGMENTS = 256;
@@ -47,6 +48,7 @@ export class Terrain {
       });
     }
     this._buildGrid();
+    this._buildTrack();
   }
 
   /** 格子上の生値 */
@@ -97,6 +99,74 @@ export class Terrain {
   slopeAt(x, z) {
     const g = this.gradient(x, z, 8);
     return Math.atan(Math.hypot(g.x, g.z));
+  }
+
+  /** 走行コースとジャンプ台・コーン・広場 */
+  _buildTrack() {
+    const loc = this.location;
+    const def = loc.track || {};
+    const ctrl = def.ctrl || fieldCircuit(this.field);
+    const grip = { snow: 0.42, dirt: 0.72 }[def.surface] || 1;
+    this.track = new Track(ctrl, { width: def.width || 16, surface: def.surface || 'asphalt', grip, heightAt: (x, z) => this.heightAt(x, z) });
+    this.laps = def.laps || 2;
+    this.pads = (def.pads || []).map((p) => ({ ...p }));
+    // ジャンプ台: コース上の位置（周の割合）と左右のずれで指定
+    this.ramps = (def.ramps || []).map((r) => {
+      const p = this.track.at(r.at * this.track.length, r.offset || 0);
+      const hd = p.heading;
+      return { x: p.x, z: p.z, heading: hd, fx: Math.sin(hd), fz: -Math.cos(hd), len: r.len || 16, width: r.width || 7, height: r.height || 2.2, base: p.y };
+    });
+    // コーン: カーブの内側に並べる（数を抑えて 1 ドローコール）
+    this.cones = [];
+    const t = this.track;
+    let lastS = -100;
+    for (const p of t.pts) {
+      if (Math.abs(p.k) < 1 / 90 || p.s - lastS < 24 || this.cones.length >= 60) continue;
+      lastS = p.s;
+      const side = p.k > 0 ? 1 : -1; // 曲がる側が内側
+      const off = side * (t.width / 2 + 1.2);
+      const x = p.x + -p.tz * off, z = p.z + p.tx * off;
+      if (this.water && this.heightAt(x, z) < 0) continue;
+      this.cones.push({ x, z, y: this.heightAt(x, z) });
+    }
+    this.startPoint = t.at(0);
+  }
+
+  /** ジャンプ台の高さ（無ければ -Infinity） */
+  rampAt(x, z) {
+    if (!this.ramps || !this.ramps.length) return -Infinity;
+    for (const r of this.ramps) {
+      const dx = x - r.x, dz = z - r.z;
+      const u = dx * r.fx + dz * r.fz;
+      if (Math.abs(u) > r.len / 2) continue;
+      const v = dx * -r.fz + dz * r.fx;
+      if (Math.abs(v) > r.width / 2) continue;
+      return r.base + (r.height * (u + r.len / 2)) / r.len;
+    }
+    return -Infinity;
+  }
+
+  /** 車の路面の種類（car.js の SURFACES のキー） */
+  surfaceKind(x, z) {
+    if (this.isWater(x, z)) return 'water';
+    if (this.roofAt(x, z) >= this.surfaceAt(x, z)) return 'concrete';
+    if (this.track && this.track.onRoad(x, z)) return this.track.surface;
+    if (this.pads) for (const p of this.pads) if (Math.hypot(x - p.x, z - p.z) <= p.r) return 'asphalt';
+    const f = this.field;
+    const { u, v } = fieldLocal(f, x, z);
+    if (Math.abs(u) <= f.length / 2 && Math.abs(v) <= f.width / 2) return f.surface || 'asphalt';
+    return this._groundKind(x, z);
+  }
+
+  _groundKind(x, z) {
+    const g = this.location.generator;
+    const steep = this.slopeAt(x, z) > 0.45;
+    if (g === 'snow') return steep ? 'rock' : 'snow';
+    if (g === 'desert') return steep ? 'rock' : 'sand';
+    if (g === 'mountains') return steep ? 'rock' : 'grass';
+    if (g === 'city' && Math.hypot(x, z) < 3150) return 'asphalt';
+    if (g === 'island' && this.heightAt(x, z) < 3.5) return 'sand';
+    return steep ? 'rock' : 'grass';
   }
 
   /** 地表の種類: 'runway' | 'field' | 'water' | 'ground' */

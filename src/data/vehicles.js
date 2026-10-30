@@ -1,7 +1,7 @@
 // 機体定義（データ）。新しい機体はここに追加する。
 // 単位: SI（m, kg, s, N, rad）。角度パラメータは deg() で度から変換。
 //
-// model: 'fixedwing' | 'heli' | 'paraglider' | 'jetsuit' | 'human' | 'balloon' | 'flycar'
+// model: 'fixedwing' | 'heli' | 'paraglider' | 'jetsuit' | 'human' | 'balloon' | 'flycar' | 'car'
 //   human は wingsuit / skydive（自由落下→展開→キャノピー）で共有する人体モデル。
 //   heli はドローンでも使う（パラメータ違い）。
 // hud:   'basic' | 'pfd' | 'fighter' | 'heli' | 'glide' | 'balloon' | 'car'
@@ -15,6 +15,13 @@ const RUDDER = [
   { id: 'rudderL', label: '◀ ラダー', type: 'hold', desc: '押している間、機首を左へ向ける（細かい向きの調整。地上では左へ曲がる）' },
   { id: 'rudderR', label: 'ラダー ▶', type: 'hold', desc: '押している間、機首を右へ向ける（地上では右へ曲がる）' },
 ];
+
+const CAR_BUTTONS = [
+  { id: 'handbrake', label: 'サイド', type: 'hold', desc: 'サイドブレーキ。押している間、後輪がロックして車の尻が流れる。曲がりながら一瞬押すとドリフトが始まる' },
+  { id: 'nitro', label: 'ニトロ', type: 'hold', desc: '押している間、大きく加速する。ゲージはドリフト中によくたまる' },
+  { id: 'reset', label: '復帰', type: 'once', desc: '立ち往生したとき、少し前に走っていた場所へ戻る' },
+];
+const CAR_THROTTLE = '右の「アクセル」「ブレーキ」を押す（設定で傾き操作・自動アクセルにも変更可）。止まってからブレーキを押し続けるとバック。';
 
 export const VEHICLES = {
   prop: {
@@ -307,6 +314,7 @@ export const VEHICLES = {
       { id: 'carMode', label: '飛行 ⇄ 走行', type: 'once', desc: '走行モードと飛行モードを切り替える。飛行 → 走行は着地しているときだけ' },
       { id: 'rudderL', label: '◀ ヨー', type: 'hold', desc: '飛行中、機首を左へ回す' },
       { id: 'rudderR', label: 'ヨー ▶', type: 'hold', desc: '飛行中、機首を右へ回す' },
+      { id: 'handbrake', label: 'サイド', type: 'hold', desc: '走行中のサイドブレーキ。曲がりながら押すとドリフトする' },
     ],
     weapon: { name: 'パルス砲', rate: 10, speed: 1200, damage: 12, ammo: 500, spread: 0.003 },
     guide: {
@@ -319,14 +327,230 @@ export const VEHICLES = {
     spawnAir: { agl: 60, speed: 0 },
     approach: { dist: 600, agl: 80, speed: 20 },
     ringRadius: 14, ringSpacingTime: 7,
+    raceTop: 70,
     p: {
       mass: 1600,
-      drive: { force: 9500, power: 450000, CdA: 0.6, rolling: 0.012, brake: 8.5, maxSteer: deg(32), wheelBase: 2.65, gripLat: 9.0, reverse: 2500 },
+      drive: { force: 9500, power: 450000, vTop: 110, wheelR: 0.33, CdA: 0.6, brake: 8.5, maxSteer: deg(32), steerFade: 25, wheelBase: 2.65, weightFront: 0.48, cgH: 0.42, gripF: 1.0, gripR: 1.0, driveFront: 0.5, spinLat: 0.65, reverse: 2500 },
       fly: { thrustMax: 1600 * 9.80665 * 2.2, dragArea: 1.25, dragAreaVertical: 4.0, inflowDamping: 0.03, att: { maxPitch: deg(28), maxRoll: deg(30), tau: 0.35 }, yaw: { maxRate: deg(60), tau: 0.3, weathervane: 0.8 } },
       battery: { burnTime: 480 },
       cgHeight: 0.55,
       landing: { maxSink: 3.5, maxSpeed: 60, maxTilt: deg(20) }, // 車輪があるので速度があっても着地できる
       bodyRadius: 1.2,
+    },
+  },
+
+  driftcar: {
+    id: 'driftcar',
+    name: 'ドリフトクーペ RS-7',
+    short: 'ドリフトクーペ',
+    desc: '後輪駆動で尻を振って走る。ドリフトの練習に最適。',
+    category: 'car',
+    stats: { speed: 4, agility: 5, difficulty: 2 },
+    model: 'car',
+    hud: 'car',
+    groundStart: true,
+    body: { style: 'coupe', paint: 0xe8e8ec, accent: 0xd62828 },
+    buttons: CAR_BUTTONS,
+    weapon: null,
+    guide: {
+      tilt: 'ハンドルのように左右に回すとステアリング。滑り始めると前輪が自動で逆ハンドルに向く（アシストは設定で変更可）。',
+      throttle: CAR_THROTTLE,
+      tips: ['ドリフトの入り方: 曲がりながら「サイド」を一瞬押す → アクセルを踏んだまま、行きたい方向へ傾ける。', 'アクセルを強く踏むと後輪が空転して滑り続け、離すとグリップが戻る。', '切り返しても 1.2 秒以内なら連続ドリフトとして点がつながる。'],
+    },
+    sound: { type: 'car', idle: 70, max: 340, tone: 0.55 },
+    camera: { cockpit: [-0.35, 0.5, -0.1], chaseDist: 7, chaseHeight: 2.3, fovBase: 72 },
+    spawnAir: { agl: 0, speed: 0 },
+    ringRadius: 12, ringSpacingTime: 7,
+    raceTop: 75,
+    p: {
+      mass: 1300,
+      drive: {
+        torque: 560, power: 320000, gears: [3.4, 2.3, 1.7, 1.3, 1.03, 0.85], final: 3.7, wheelR: 0.33, rpmMax: 7800,
+        CdA: 0.68, brake: 11, reverse: 5000, maxSteer: deg(52), steerFade: 30, wheelBase: 2.6, weightFront: 0.52, cgH: 0.45,
+        gripF: 1.0, gripR: 0.98, driveFront: 0, spinLat: 0.55, nitro: { time: 4, boost: 1.2, accel: 3.5 },
+      },
+      cgHeight: 0.5,
+      bodyRadius: 1.2,
+      landing: { maxSink: 4, maxSpeed: 90, maxTilt: deg(30) },
+    },
+  },
+
+  rally: {
+    id: 'rally',
+    name: 'ラリーカー RX-4',
+    short: 'ラリーカー',
+    desc: '四輪駆動で砂利も雪も強い。ジャンプも得意。',
+    category: 'car',
+    stats: { speed: 3, agility: 4, difficulty: 1 },
+    model: 'car',
+    hud: 'car',
+    groundStart: true,
+    body: { style: 'rally', paint: 0x2f6fe0, accent: 0xffc23a },
+    buttons: CAR_BUTTONS,
+    weapon: null,
+    guide: {
+      tilt: 'ハンドルのように左右に回すとステアリング。未舗装でもよく曲がる。',
+      throttle: CAR_THROTTLE,
+      tips: ['砂漠・雪山など舗装の無い場所が得意（路面の滑りやすさの影響が小さい）。', 'ジャンプの着地は真っすぐ向けて。'],
+    },
+    sound: { type: 'car', idle: 85, max: 400, tone: 0.75 },
+    camera: { cockpit: [-0.35, 0.55, -0.1], chaseDist: 7, chaseHeight: 2.6, fovBase: 72 },
+    spawnAir: { agl: 0, speed: 0 },
+    ringRadius: 12, ringSpacingTime: 7,
+    raceTop: 58,
+    p: {
+      mass: 1250,
+      drive: {
+        torque: 480, power: 240000, gears: [3.3, 2.2, 1.6, 1.25, 1.0], final: 4.2, wheelR: 0.33, rpmMax: 7500,
+        CdA: 0.8, brake: 10, reverse: 5000, maxSteer: deg(44), steerFade: 30, wheelBase: 2.5, weightFront: 0.52, cgH: 0.5,
+        gripF: 1.0, gripR: 0.98, driveFront: 0.45, spinLat: 0.6, offroad: 0.8, nitro: { time: 4, boost: 1.2, accel: 3 },
+      },
+      cgHeight: 0.58,
+      bodyRadius: 1.2,
+      landing: { maxSink: 7, maxSpeed: 90, maxTilt: deg(35) },
+    },
+  },
+
+  hypercar: {
+    id: 'hypercar',
+    name: 'ハイパーカー HX-9',
+    short: 'ハイパーカー',
+    desc: '最高時速 約 400 km。空力で張り付くが、速さの管理が難しい。',
+    category: 'car',
+    stats: { speed: 5, agility: 3, difficulty: 4 },
+    model: 'car',
+    hud: 'car',
+    groundStart: true,
+    body: { style: 'hyper', paint: 0xf08a1a, accent: 0x15181e },
+    buttons: CAR_BUTTONS,
+    weapon: null,
+    guide: {
+      tilt: 'ハンドルは敏感。高速ではごくわずかに傾けるだけで曲がる。',
+      throttle: CAR_THROTTLE,
+      tips: ['速いほど空力で路面に押し付けられ、高速コーナーに強い。', 'ブレーキは早めに。'],
+    },
+    sound: { type: 'car', idle: 95, max: 520, tone: 0.95 },
+    camera: { cockpit: [-0.35, 0.38, -0.15], chaseDist: 7.5, chaseHeight: 2.1, fovBase: 72 },
+    spawnAir: { agl: 0, speed: 0 },
+    ringRadius: 14, ringSpacingTime: 6,
+    raceTop: 100,
+    p: {
+      mass: 1500,
+      drive: {
+        torque: 1100, power: 850000, gears: [3.2, 2.3, 1.75, 1.4, 1.15, 0.95, 0.78], final: 3.2, wheelR: 0.35, rpmMax: 8500,
+        CdA: 0.72, ClA: 2.2, brake: 14, reverse: 5000, maxSteer: deg(34), steerFade: 40, wheelBase: 2.7, weightFront: 0.46, cgH: 0.38,
+        gripF: 1.2, gripR: 1.2, driveFront: 0.35, spinLat: 0.6, driftSpeed: 32, nitro: { time: 3.5, boost: 1.1, accel: 4 },
+      },
+      cgHeight: 0.42,
+      bodyRadius: 1.2,
+      landing: { maxSink: 3, maxSpeed: 120, maxTilt: deg(25) },
+    },
+  },
+
+  monster: {
+    id: 'monster',
+    name: 'モンスタートラック MT-X',
+    short: 'モンスター',
+    desc: '巨大タイヤで急斜面も段差も乗り越える。どこでも走れる。',
+    category: 'car',
+    stats: { speed: 3, agility: 2, difficulty: 2 },
+    model: 'car',
+    hud: 'car',
+    groundStart: true,
+    body: { style: 'monster', paint: 0x18a058, accent: 0xf4e04d },
+    buttons: CAR_BUTTONS,
+    weapon: null,
+    guide: {
+      tilt: 'ハンドルのように左右に回すとステアリング。背が高いので車体が大きく傾く。',
+      throttle: CAR_THROTTLE,
+      tips: ['草地・砂地でも舗装とほぼ同じように走れる。', '段差（1.2 m まで）を乗り越える。'],
+    },
+    sound: { type: 'car', idle: 50, max: 240, tone: 0.4 },
+    camera: { cockpit: [-0.4, 1.0, 0.1], chaseDist: 10, chaseHeight: 3.8, fovBase: 72 },
+    spawnAir: { agl: 0, speed: 0 },
+    ringRadius: 14, ringSpacingTime: 7,
+    raceTop: 55,
+    p: {
+      mass: 3200,
+      drive: {
+        torque: 2400, power: 480000, gears: [2.6, 1.7, 1.2, 0.9], final: 6.0, wheelR: 0.8, rpmMax: 5500,
+        CdA: 3.2, brake: 8, reverse: 12000, maxSteer: deg(38), steerFade: 30, wheelBase: 3.2, weightFront: 0.5, cgH: 1.1,
+        gripF: 0.95, gripR: 0.95, driveFront: 0.45, spinLat: 0.7, driftSpeed: 18, driftAngle: 0.6, offroad: 1, maxStep: 1.2, bodyLean: 0.025, nitro: { time: 4, boost: 1.2, accel: 2.5 },
+      },
+      cgHeight: 1.35,
+      bodyRadius: 1.8,
+      landing: { maxSink: 12, maxSpeed: 90, maxTilt: deg(40) },
+    },
+  },
+
+  kart: {
+    id: 'kart',
+    name: 'レーシングカート K-1',
+    short: 'カート',
+    desc: '軽くて小回り抜群。地面すれすれの速さが楽しい。',
+    category: 'car',
+    stats: { speed: 2, agility: 5, difficulty: 1 },
+    model: 'car',
+    hud: 'car',
+    groundStart: true,
+    body: { style: 'kart', paint: 0xf0c020, accent: 0x202830 },
+    buttons: CAR_BUTTONS,
+    weapon: null,
+    guide: {
+      tilt: 'ハンドルのように左右に回すとステアリング。よく曲がるので小さく傾ける。',
+      throttle: CAR_THROTTLE,
+      tips: ['ブレーキをあまり踏まずにコーナーを抜けられる。', 'サイドで向きを一気に変えられる。'],
+    },
+    sound: { type: 'car', idle: 120, max: 560, tone: 0.9 },
+    camera: { cockpit: [0, 0.5, 0.05], chaseDist: 4.6, chaseHeight: 1.7, fovBase: 76 },
+    spawnAir: { agl: 0, speed: 0 },
+    ringRadius: 10, ringSpacingTime: 7,
+    raceTop: 42,
+    p: {
+      mass: 170,
+      drive: {
+        force: 1100, power: 24000, vTop: 45, wheelR: 0.13,
+        CdA: 0.55, brake: 13, reverse: 500, maxSteer: deg(30), steerFade: 45, wheelBase: 1.05, weightFront: 0.42, cgH: 0.2,
+        gripF: 1.1, gripR: 1.1, driveFront: 0, spinLat: 0.7, driftSpeed: 16, driftAngle: 0.6, bodyLean: 0.006, nitro: { time: 3.5, boost: 1.2, accel: 3 },
+      },
+      cgHeight: 0.25,
+      bodyRadius: 0.8,
+      landing: { maxSink: 3, maxSpeed: 60, maxTilt: deg(30) },
+    },
+  },
+
+  hover: {
+    id: 'hover',
+    name: 'ホバーカー HV-3',
+    short: 'ホバーカー',
+    desc: '浮いて走るので水の上も行ける。氷の上のように滑る。',
+    category: 'car',
+    stats: { speed: 4, agility: 3, difficulty: 3 },
+    model: 'car',
+    hud: 'car',
+    groundStart: true,
+    body: { style: 'hover', paint: 0x6c4fe0, accent: 0x6fd8ff },
+    buttons: CAR_BUTTONS,
+    weapon: null,
+    guide: {
+      tilt: '左右に傾けると向きが変わるが、車体は慣性で滑っていく（早めに向きを変える）。',
+      throttle: CAR_THROTTLE,
+      tips: ['海の上も走れる（島の間を渡れる）。', '「サイド」を押している間は、さらに大きく滑ってくるっと向きを変えられる。'],
+    },
+    sound: { type: 'ev', baseFreq: 110, maxFreq: 700 },
+    camera: { cockpit: [0, 0.55, -0.2], chaseDist: 8, chaseHeight: 2.8, fovBase: 72 },
+    spawnAir: { agl: 0, speed: 0 },
+    ringRadius: 12, ringSpacingTime: 7,
+    raceTop: 60,
+    p: {
+      mass: 900,
+      drive: {
+        hover: true, force: 6500, power: 260000, CdA: 0.8, brake: 4.5, reverse: 2500, latDrag: 1.3, maxYaw: 1.6,
+        wheelBase: 2.5, wheelR: 0.33, nitro: { time: 4, boost: 1.2, accel: 3 },
+      },
+      cgHeight: 1.05,
+      bodyRadius: 1.5,
+      landing: { maxSink: 10, maxSpeed: 120, maxTilt: deg(45) },
     },
   },
 
@@ -510,7 +734,16 @@ export const VEHICLES = {
   },
 };
 
-export const VEHICLE_ORDER = ['prop', 'airliner', 'fighter', 'sailplane', 'heli', 'drone', 'flycar', 'balloon', 'paraglider', 'jetsuit', 'wingsuit', 'skydive'];
+export const VEHICLE_ORDER = ['prop', 'airliner', 'fighter', 'sailplane', 'heli', 'drone', 'balloon', 'paraglider', 'jetsuit', 'wingsuit', 'skydive', 'driftcar', 'rally', 'hypercar', 'monster', 'kart', 'hover', 'flycar'];
+
+/** 機体選択のタブ（category の値で分類） */
+export const VEHICLE_TABS = [
+  { id: 'all', name: 'すべて' },
+  { id: 'plane', name: '飛行機', cats: ['plane', 'glider'] },
+  { id: 'rotor', name: '回転翼', cats: ['rotor'] },
+  { id: 'car', name: '車', cats: ['car'] },
+  { id: 'human', name: '人', cats: ['human'] },
+];
 
 export function getVehicle(id) {
   const v = VEHICLES[id];

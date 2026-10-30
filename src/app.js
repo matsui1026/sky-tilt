@@ -14,12 +14,15 @@ import { InputManager } from './input/manager.js';
 import { haptic } from './input/touch.js';
 import { DEFAULT_INPUT_SETTINGS } from './input/pipeline.js';
 import { AudioEngine } from './audio/audio.js';
-import { VEHICLES } from './data/vehicles.js';
-import { LOCATIONS, MODES } from './data/locations.js';
+import { VEHICLES, VEHICLE_ORDER } from './data/vehicles.js';
+import { LOCATIONS, LOCATION_ORDER, MODES } from './data/locations.js';
 import { Session } from './net/session.js';
 import { RtcTransport, PeerJsTransport, makeRoomCode, peerErrorMessage } from './net/transport.js';
 import { SILENCE_WARN } from './net/session.js';
-import { CRUISE } from './sim/modes.js';
+import { CRUISE, modesFor } from './sim/modes.js';
+import { Progress } from './game/progress.js';
+import { dailyChallenge, dailyScore, dateKey } from './game/daily.js';
+import { LessonRunner, LESSONS } from './game/lessons.js';
 import { encodeState, extraToVs, STATE_HZ } from './net/protocol.js';
 
 const SETTINGS_KEY = 'skytilt.settings.v1';
@@ -28,6 +31,10 @@ const BEST_KEY = 'skytilt.best.v1';
 const COMBAT_BEST_KEY = 'skytilt.combatBest.v1';
 const GHOST_KEY = 'skytilt.ghost.v1.';
 const NAME_KEY = 'skytilt.name.v1';
+const PROGRESS_KEY = 'skytilt.progress.v1';
+const MODE_BEST_KEY = 'skytilt.modeBest.v1';
+const DAILY_KEY = 'skytilt.daily.v1';
+const CAM_DIST = { near: 0.72, normal: 1, far: 1.45 };
 export const DEFAULT_SEED = 1234;
 
 const store = {
@@ -50,11 +57,17 @@ export class App {
     this.settings = {
       ...DEFAULT_INPUT_SETTINGS, control: 'auto', volume: 0.8, vibrate: true, cameraShake: true,
       minimap: true, ghost: true, quality: 'auto', difficulty: 'normal', lefty: false,
+      uiSize: 'normal', hudOpacity: 1, camDist: 'normal',
+      carAssist: 'mid', carPedal: 'buttons', carSteer: 'tilt', carSens: 1, paints: {},
       ...store.get(SETTINGS_KEY, {}),
     };
     this.warp = 1;
     this.hitDirs = []; // 被弾方向の表示 { from, t }
     this.renderPaused = false;
+    this.replay = null;
+    this.photo = null;
+    this.lesson = null;
+    this.progress = new Progress(store, PROGRESS_KEY, { vehicleCount: VEHICLE_ORDER.length, locationCount: LOCATION_ORDER.length, lessonCount: LESSONS.length });
     this.sensorOk = false;
     this.flying = false;
     this.paused = false;
@@ -112,6 +125,13 @@ export class App {
       onVehicleNext: () => this.onVehicleNext(),
       onVehicleBack: () => (this.mp ? this.openLobby() : this.screens.show('title')),
       currentVehicle: () => (this.def ? this.def.id : null),
+      onDaily: () => this.openDaily(),
+      onRecords: () => { this.progress.flush(); this.screens.showRecords(this.progress); },
+      onLesson: (id) => this.startLesson(id),
+      lessonsDone: () => this.progress.stats.lessons,
+      onPhoto: () => this.startPhoto(),
+      getPaint: (id) => this.settings.paints[id] ?? null,
+      setPaint: (id, col) => { this.settings.paints[id] = col; store.set(SETTINGS_KEY, this.settings); },
       onFly: (cfg) => this.onFly(cfg),
       onResume: () => this.resume(),
       onRecalibrate: () => { this.recalibrate(); this.resume(); },
@@ -199,7 +219,7 @@ export class App {
     const mode = c === 'stick' ? 'stick' : c === 'tilt' ? 'tilt' : this.sensorOk ? 'tilt' : 'stick';
     const changed = mode !== this.input.mode;
     this.input.setMode(mode);
-    this.controls.setStickVisible(mode === 'stick');
+    this.controls.setStickVisible(mode === 'stick' && !(this.def && this.def.model === 'car' && this.settings.carSteer === 'buttons'));
     this.updateHudBounds();
     if (announce && mode === 'stick' && c === 'auto') this.toast('傾きセンサーが使えないため、スティック操作に切り替えました');
     if (mode === 'tilt' && c === 'tilt' && !this.input.tilt.hasData() && this.input.tilt.listening) this.toast('傾きセンサーの値が届いていません。設定でスティックに切り替えてください');
@@ -222,7 +242,31 @@ export class App {
     // 左利き: スティック・機体ボタンを右、スロットル・射撃を左へ
     document.body.classList.toggle('lefty', !!s.lefty);
     this.hud.mirror = !!s.lefty;
+    document.body.classList.toggle('btn-large', s.uiSize === 'large');
+    this.hudCanvas.style.opacity = String(s.hudOpacity ?? 1);
+    this.renderer.rig.distScale = CAM_DIST[s.camDist] ?? 1;
+    this.applyCarSettings();
     this.applyControlMode(false);
+  }
+
+  /** 車の操作設定を入力と操作 UI へ */
+  applyCarSettings() {
+    const d = this.def;
+    const s = this.settings;
+    const isCar = !!d && d.model === 'car';
+    this.input.car = {
+      active: !!d && d.category === 'car',
+      pedal: isCar ? s.carPedal : 'buttons',
+      steer: isCar ? s.carSteer : 'tilt',
+      sensitivity: isCar ? s.carSens : 1,
+    };
+    if (this.sim._env) this.sim._env.carAssist = { high: 0.9, mid: 0.55, off: 0 }[s.carAssist] ?? 0.55;
+    if (d && this.flying) {
+      this.controls.setVehicle(d, { combat: this.sim.mode === 'combat', warp: this.canWarp(), car: { pedal: this.input.car.pedal, steer: this.input.car.steer } });
+      this.controls.setWarp(this.warp);
+      this.controls.setStickVisible(this.input.mode === 'stick' && !(isCar && s.carSteer === 'buttons'));
+      this.updateHudBounds();
+    }
   }
 
   openSettings(from) {
@@ -252,7 +296,7 @@ export class App {
       const mode = cfg.mode === 'landing' ? 'free' : cfg.mode;
       // リングは遅い方の機体に合わせたコース・大きい方の輪（速い機体は大回りすれば通れるが、遅い機体は速い機体のコースを回れない）
       const other = this.mp.session.remote.vehicle;
-      const opts = { time: cfg.time, weather: cfg.weather, mode, seed, pvp: mode === 'combat' };
+      const opts = { time: cfg.time, weather: cfg.weather, mode, seed, pvp: mode === 'combat', rivals: 0 };
       if (mode === 'rings' && other && VEHICLES[other]) {
         const mine = VEHICLES[cfg.vehicle];
         const theirs = VEHICLES[other];
@@ -264,6 +308,25 @@ export class App {
       return;
     }
     this.startFlight(cfg.vehicle, cfg.location, { time: cfg.time, weather: cfg.weather, mode: cfg.mode, difficulty: this.settings.difficulty });
+  }
+
+  // ---------- 今日のチャレンジ・練習 ----------
+  openDaily() {
+    this.initInput();
+    const ch = dailyChallenge();
+    const best = store.get(DAILY_KEY, {})[ch.key] ?? null;
+    this.screens.showDaily(ch, best, () => {
+      this.leaveMultiplayer();
+      this.startFlight(ch.vehicle, ch.location, { time: ch.time, weather: ch.weather, mode: ch.mode, seed: ch.seed, difficulty: 'normal', daily: ch.key });
+    });
+  }
+
+  startLesson(id) {
+    this.initInput();
+    const l = LESSONS.find((x) => x.id === id);
+    if (!l) return;
+    this.leaveMultiplayer();
+    this.startFlight(l.vehicle, l.location, { time: 'noon', weather: 'clear', mode: 'free', calm: true, skipTutorial: true, lesson: id });
   }
 
   /** ホスト: 飛行を始めて、同じ条件（リング・的の配置まで）をゲストへ送る */
@@ -281,19 +344,27 @@ export class App {
   startFlight(vehicleId, locationId, opts = {}) {
     this.cfg = { vehicleId, locationId, opts: { ...opts } };
     const sim = this.sim;
+    // その機体で遊べないモード（2 人プレイで相手と機体の種類が違うときなど）はフリーにする
+    const mode0 = opts.mode || 'free';
+    const mode1 = modesFor(VEHICLES[vehicleId]).includes(mode0) ? mode0 : 'free';
     sim.load(vehicleId, locationId, {
-      seed: opts.seed ?? DEFAULT_SEED, time: opts.time || 'noon', weather: opts.weather || 'clear', mode: opts.mode || 'free',
+      seed: opts.seed ?? DEFAULT_SEED, time: opts.time || 'noon', weather: opts.weather || 'clear', mode: mode1,
       calm: opts.calm, spawn: opts.spawn, rings: opts.rings || null, pvp: opts.pvp, spawnOffset: opts.spawnOffset,
       difficulty: opts.difficulty, targets: opts.targets || null, courseVehicle: opts.courseVehicle, ringRadius: opts.ringRadius,
+      carAssist: this.settings.carAssist, rivals: opts.rivals ?? (this.mp ? 0 : 3), countdown: opts.countdown, laps: opts.laps, driftTime: opts.driftTime,
     });
     const def = sim.def;
     this.def = def;
-    this.renderer.load(sim.world, def, sim.rings, sim.mode, sim.combat);
+    this.renderer.load(sim.world, def, sim.rings, sim.mode, sim.combat, { paint: this.settings.paints[def.id], race: sim.race });
     this.renderer.setCameraMode(CAMERA_MODES[this.cameraIdx]);
     this.hud.setVehicle(def);
     this.warp = 1;
     this.hitDirs = [];
-    this.controls.setVehicle(def, { combat: sim.mode === 'combat', warp: this.canWarp() });
+    this.lesson = opts.lesson ? new LessonRunner(opts.lesson) : null;
+    this.replay = null;
+    this.closePhoto();
+    this.input.car = { active: def.category === 'car', pedal: def.model === 'car' ? this.settings.carPedal : 'buttons', steer: def.model === 'car' ? this.settings.carSteer : 'tilt', sensitivity: def.model === 'car' ? this.settings.carSens : 1 };
+    this.controls.setVehicle(def, { combat: sim.mode === 'combat', warp: this.canWarp(), car: { pedal: this.input.car.pedal, steer: this.input.car.steer } });
     this.controls.show(true);
     this.updateHudBounds(); // 操作 UI が変わったら HUD の配置範囲もすぐ更新
     this.input.setThrottle(sim.ctl.throttle);
@@ -317,11 +388,13 @@ export class App {
     this.needRecal = false;
     this.input.calibrate(300);
     this.applyControlMode(false);
-    // ゴースト（リングコースの自己ベスト）
-    // 2 人プレイ中は相手のコースなので記録しない
-    this.ghostRec = sim.mode === 'rings' && !this.mp ? new GhostRecorder() : null;
+    this.progress.addUnique('vehicles', def.id);
+    this.progress.addUnique('locations', locationId);
+    this._wasGround = sim.vs.onGround;
+    // ゴースト（リングコース・レースの自己ベスト）。記録はリプレイにも使う
+    this.ghostRec = new GhostRecorder();
     this.ghost = null;
-    if (sim.mode === 'rings' && this.settings.ghost !== false && !this.mp) {
+    if ((sim.mode === 'rings' || sim.mode === 'race') && this.settings.ghost !== false && !this.mp) {
       const data = store.get(GHOST_KEY + this.ghostKey(), null);
       if (data) {
         this.ghost = new GhostPlayer(data);
@@ -355,6 +428,7 @@ export class App {
   }
 
   ghostKey() {
+    if (this.sim.mode === 'race') return `race:${this.cfg.vehicleId}:${this.cfg.locationId}`;
     return `${this.cfg.vehicleId}:${this.cfg.locationId}`;
   }
 
@@ -381,7 +455,11 @@ export class App {
   }
 
   toMenu(name) {
+    this.progress.flush();
     this.flying = false;
+    this.replay = null;
+    this.closePhoto();
+    this.closeOverlay();
     this.paused = false;
     this.controls.show(false);
     this.audio.silence();
@@ -436,6 +514,7 @@ export class App {
     // A/B は推力 85% 以上で作動するので、入れたらスロットルを最大にする
     if (id === 'ab' && r === true) this.input.setThrottle(1);
     if (id === 'carMode' && r === 'fly' && this.sim.vs.onGround) this.input.setThrottle(Math.max(this.input.throttle, 0.5));
+    if (id === 'autopilot' && r && this.def.model !== 'fixedwing') this.input.setThrottle(this.sim.hoverThrottleAt(this.sim.vs.pos.y) ?? this.input.throttle);
   }
 
   uiKey(id) {
@@ -482,6 +561,7 @@ export class App {
           // 撃墜されたことを相手に伝える（相手側で「撃墜！」と点数）
           if (this.mp) this.mp.session.sendEvent({ type: 'crash', downed: /相手に撃墜/.test(ev.cause || '') });
           this.warp = 1;
+          this.progress.add('crashes');
           clearTimeout(this.crashTimer);
           this.crashTimer = setTimeout(() => {
             if (this.sim.status === 'crashed' && this.flying) {
@@ -490,16 +570,19 @@ export class App {
                 retry: () => this.restart(),
                 vehicle: () => this.toMenu('vehicle'),
                 location: () => this.toMenu(this.mp && this.mp.role === 'guest' ? 'vehicle' : 'location'),
+                replay: () => this.startReplay(() => this.screens.show('crash')),
               });
             }
           }, this.manual ? 0 : 1300);
           break;
         case 'touchdown':
           haptic(clamp(Math.round(20 + Math.abs(ev.vs || 0) * 25), 20, 120));
+          if (ev.car) this.progress.max('bestAir', ev.airTime || 0);
           this.renderer.rig.bump(clamp(Math.abs(ev.vs || 0) * 0.004, 0.002, 0.02));
           break;
         case 'ring':
           haptic(15);
+          this.progress.add('rings');
           break;
         case 'ringMiss':
           this.toast('リングを外した（+5秒）');
@@ -518,11 +601,12 @@ export class App {
           break;
         case 'pop':
           haptic(12);
+          this.progress.add('balloons');
           if (this.mp && ev.by !== 'remote') this.mp.session.sendEvent({ type: 'pop', id: ev.id });
           break;
         case 'kill':
           haptic(40);
-          if (ev.target === 'enemy') this.toast('撃墜！');
+          if (ev.target === 'enemy') { this.toast('撃墜！'); this.progress.add('kills'); }
           break;
         case 'playerHit':
           haptic(60);
@@ -538,6 +622,43 @@ export class App {
         case 'externalHit':
           if (this.mp) this.mp.session.sendEvent({ type: 'hit', dmg: ev.dmg });
           haptic(10);
+          break;
+        // 車
+        case 'carHit':
+          haptic(clamp(Math.round(20 + (ev.impact || 0) * 6), 20, 120));
+          this.renderer.rig.bump(clamp((ev.impact || 0) * 0.002, 0.003, 0.03));
+          break;
+        case 'cone':
+          haptic(10);
+          this.progress.add('cones');
+          break;
+        case 'nitro':
+          haptic(30);
+          break;
+        case 'driftStart':
+          haptic(15);
+          break;
+        case 'driftEnd':
+          this.progress.max('driftBest', ev.score);
+          this.progress.add('driftTotal', ev.score);
+          if (ev.score >= 200) this.toast(`ドリフト +${ev.score.toLocaleString()}（×${ev.mult}）`, 1400);
+          break;
+        case 'driftLost':
+          this.toast(`ぶつかって ${ev.score.toLocaleString()} 点を失いました`, 1400);
+          break;
+        case 'carReset':
+          if (ev.reason === 'water') this.toast('水に落ちたので、少し前の場所に戻しました');
+          break;
+        case 'countdown':
+          haptic(ev.n > 0 ? 15 : 60);
+          break;
+        case 'lap':
+          this.toast(`${ev.lap} 周目 ${fmtTimeS(ev.time)}`, 1600);
+          haptic(25);
+          break;
+        case 'parked':
+          this.toast(`駐車 ${ev.score} 点`, 1600);
+          haptic(30);
           break;
         case 'lock':
           haptic(25);
@@ -580,6 +701,45 @@ export class App {
         res.opponent = o ? `${fmtTimeS(o.total)}（${o.passed} 個）${o.total < res.total ? ' — 相手の勝ち' : ' — あなたの勝ち！'}` : 'まだ飛行中';
       }
     }
+    if (res.type === 'landing') {
+      this.progress.add('landings');
+      if (res.grade === 'S') this.progress.add('landingS');
+    }
+    if (res.type === 'race' || res.type === 'drift' || res.type === 'parking') {
+      const bkey = `${res.type}:${this.cfg.vehicleId}:${this.cfg.locationId}`;
+      const best = store.get(MODE_BEST_KEY, {});
+      const val = res.type === 'race' ? res.time : res.score;
+      const prev = best[bkey];
+      const better = prev == null || (res.type === 'race' ? val < prev : val > prev);
+      res.newBest = !this.mp && better;
+      if (res.newBest) {
+        best[bkey] = val;
+        store.set(MODE_BEST_KEY, best);
+        if (res.type === 'race' && this.ghostRec) store.set(GHOST_KEY + this.ghostKey(), this.ghostRec.toJSON());
+      }
+      res.best = best[bkey] ?? null;
+      if (res.type === 'race') {
+        this.progress.add('races');
+        if (res.place === 1 && res.cars > 1) {
+          this.progress.add('raceWins');
+          if (this.cfg.opts.difficulty === 'hard') this.progress.add('raceWinsHard');
+        }
+        if (this.mp) {
+          this.mp.session.sendEvent({ type: 'finish', total: res.time, passed: res.place, race: true });
+          const o = this.mp.remoteFinish;
+          res.opponent = o ? `${fmtTimeS(o.total)}${o.total < res.time ? ' — 相手の勝ち' : ' — あなたの勝ち！'}` : 'まだ走行中';
+        }
+      }
+      if (res.type === 'parking' && res.grade === 'S') this.progress.add('parkS');
+    }
+    if (this.cfg.opts.daily) {
+      const d = store.get(DAILY_KEY, {});
+      const v = dailyScore(res);
+      if (d[this.cfg.opts.daily] == null || v > d[this.cfg.opts.daily]) { d[this.cfg.opts.daily] = v; store.set(DAILY_KEY, d); }
+      this.progress.addUnique('dailyDays', this.cfg.opts.daily);
+      this.toast(`今日のチャレンジ: ${v.toLocaleString()} 点`, 3000);
+    }
+    this.progress.flush();
     if (res.type === 'combat') {
       const key = this.ghostKey();
       // 難易度ごとに別の記録。途中終了（着地）の点数も記録には残す
@@ -601,6 +761,7 @@ export class App {
         vehicle: () => this.toMenu('vehicle'),
         location: () => this.toMenu(this.mp && this.mp.role === 'guest' ? 'vehicle' : 'location'),
         share: () => this.share(res),
+        replay: () => this.startReplay(show),
       });
     };
     if (this.manual) show();
@@ -611,6 +772,9 @@ export class App {
     const loc = LOCATIONS[this.cfg.locationId].name;
     const text = res.type === 'rings' ? `SKY TILT リングコース（${this.def.short}・${loc}）${fmtTimeS(res.total)} / ${res.passed}個通過`
       : res.type === 'combat' ? `SKY TILT 射撃（${this.def.short}・${loc}）${res.score}点`
+      : res.type === 'race' ? `SKY TILT レース（${this.def.short}・${loc}）${res.place}位 ${fmtTimeS(res.time)}`
+      : res.type === 'drift' ? `SKY TILT ドリフト（${this.def.short}・${loc}）${res.score}点 評価 ${res.grade}`
+      : res.type === 'parking' ? `SKY TILT 駐車（${this.def.short}・${loc}）${res.score}点 評価 ${res.grade}`
         : `SKY TILT 着陸（${this.def.short}・${loc}）評価 ${res.grade} / ${res.score}点`;
     const url = location.href.split('?')[0];
     if (navigator.share) navigator.share({ title: 'SKY TILT', text, url }).catch(() => {});
@@ -766,6 +930,8 @@ export class App {
     const realDt = clamp((now - this.last) / 1000, 0, 1);
     const dt = Math.min(realDt, 0.1);
     this.last = now;
+    if (this.photo) { this.renderer.renderOrbit(realDt, this.photo.target, this.photo.yaw, this.photo.pitch, this.photo.dist); return; }
+    if (this.replay) { this.stepReplay(realDt); return; }
     if (!this.flying) return;
     this.adaptQuality(dt);
     if (this.mp) this.remoteSample = this.mp.session.sampleRemote();
@@ -802,7 +968,7 @@ export class App {
         this.mp.session.sendState(encodeState(this.mp.session.now(), st, this.sim.vs));
       }
       const r = this.remoteSample;
-      if (r && this.renderer.ghosts.has('remote')) this.renderer.updateGhost('remote', r.mode === 'stale' && r.extra.crashed ? null : r.pos, r.q, extraToVs(r.extra), dt);
+      if (r && this.renderer.ghosts.has('remote')) this.renderer.updateGhost('remote', r.mode === 'stale' && r.extra.crashed ? null : r.pos, r.q, { ...extraToVs(r.extra), vx: Math.hypot(r.vel.x, r.vel.z) }, dt);
     }
     // ゴースト
     if (this.ghost) {
@@ -811,6 +977,7 @@ export class App {
     }
     const alpha = this.manual || this.paused ? 1 : clamp(this.acc / DT, 0, 1);
     // テスト用: 描画を止めて通信の遅延だけを測る（?debug=1 の setRenderPaused）
+    this.tickProgress(st, dt);
     if (this.renderPaused) return;
     this.renderer.render(dt, this.snapPrev, this.snapCur, alpha, st, this.sim.vs);
     if ((this._bf = (this._bf || 0) + 1) % 15 === 1) this.updateHudBounds();
@@ -818,6 +985,150 @@ export class App {
     this.audio.update(st, this.sim.vs, this.def, this.paused);
     this.controls.sync(st);
     this.updateFx(realDt, st);
+  }
+
+  /** 実績の累計と、練習モードの進行 */
+  tickProgress(st, dt) {
+    if (this.paused || st.status !== 'flying') return;
+    const def = this.def;
+    this.progress.tick(st, def, this.sim.world.weather.id, this.sim.world.time.id, this.manual ? 0 : dt * this.warp);
+    if (this._wasGround && !st.onGround && (def.model === 'fixedwing' || def.model === 'heli')) this.progress.add('takeoffs');
+    this._wasGround = st.onGround;
+    for (const a of this.progress.drain()) this.toast(`🏆 実績「${a.name}」`, 3000);
+    if (this.lesson) {
+      const r = this.lesson.update(st, dt);
+      if (r === 'next') { haptic(20); this.audio.event({ type: 'checkpoint' }); }
+      if (r === 'done') {
+        this.progress.addUnique('lessons', this.lesson.lesson.id);
+        this.toast('練習完了！ このまま自由に操作できます', 3500);
+        this.audio.event({ type: 'lap' });
+        this.lesson = null;
+      }
+    }
+  }
+
+  // ---------- リプレイ ----------
+  /** back: 閉じたあとに戻る画面を出す関数 */
+  startReplay(back) {
+    if (!this.ghostRec || this.ghostRec.frames.length < 5) { this.toast('リプレイの記録がありません'); return; }
+    const player = new GhostPlayer(this.ghostRec.toJSON());
+    const STYLES = ['chase', 'external', 'trackside'];
+    const NAMES = { chase: '後方', external: '周回', trackside: '定点' };
+    const r = { player, t: player.f[0][0], speed: 1, style: 0, styles: STYLES, prev: null, back };
+    this.replay = r;
+    this.screens.hideAll();
+    this.controls.show(false);
+    this.hud.clear();
+    this.renderer.setRivalsVisible(false);
+    const camBtn = tapButton(`視点: ${NAMES[STYLES[0]]}`, () => { r.style = (r.style + 1) % STYLES.length; camBtn.textContent = `視点: ${NAMES[STYLES[r.style]]}`; }, 'btn', { id: 'btn-replay-cam' });
+    const spBtn = tapButton('速さ ×1', () => { r.speed = r.speed === 1 ? 2 : r.speed === 2 ? 0.5 : 1; spBtn.textContent = `速さ ×${r.speed}`; }, 'btn', { id: 'btn-replay-speed' });
+    const close = tapButton('閉じる', () => this.closeReplay(), 'btn primary', { id: 'btn-replay-close' });
+    this.overlayEl = h('div', { class: 'overlay-bar', id: 'replay-bar' }, camBtn, spBtn, close);
+    this.root.append(this.overlayEl);
+  }
+
+  stepReplay(dt) {
+    const r = this.replay;
+    r.t += dt * r.speed;
+    if (r.t >= r.player.duration) { r.t = r.player.f[0][0]; r.player.i = 0; r.prev = null; }
+    const g = r.player.sample(r.t);
+    if (!g) return;
+    const sp = r.prev && dt > 0 ? Math.hypot(g.pos.x - r.prev.x, g.pos.y - r.prev.y, g.pos.z - r.prev.z) / Math.max(dt * r.speed, 1e-3) : 0;
+    r.prev = g.pos;
+    this.renderer.renderPose(dt, g.pos, g.q, { speed: sp, vx: sp, throttle: 0.5, rotorRpm: 1, fanRpm: this.sim.vs.fanRpm ?? 1, deployT: 99, phase: this.sim.vs.phase ?? null, gearPos: this.sim.vs.gearPos ?? 1, carMode: this.sim.vs.mode ?? 'drive' }, r.styles[r.style]);
+  }
+
+  closeReplay() {
+    const r = this.replay;
+    this.replay = null;
+    this.closeOverlay();
+    this.renderer.setRivalsVisible(true);
+    this.renderer.setCameraMode(CAMERA_MODES[this.cameraIdx]);
+    if (r && r.back) r.back();
+  }
+
+  closeOverlay() {
+    if (this.overlayEl) { this.overlayEl.remove(); this.overlayEl = null; }
+    if (this.overlayHint) { this.overlayHint.remove(); this.overlayHint = null; }
+  }
+
+  // ---------- 写真モード ----------
+  startPhoto() {
+    if (!this.flying || !this.sim.vs) return;
+    const p = this.sim.vs.pos;
+    const size = this.renderer.model.root.userData.size || 8;
+    const att = this.sim.getState().attitude;
+    this.photo = { target: { x: p.x, y: p.y, z: p.z }, yaw: ((att.heading + 150) * Math.PI) / 180, pitch: 0.18, dist: Math.max(6, size * 1.2) };
+    this.screens.hideAll();
+    this.paused = true;
+    this.controls.show(false);
+    this.hud.clear();
+    const ph = this.photo;
+    const surface = h('div', { id: 'photo-surface' });
+    const pointers = new Map();
+    let pinch0 = 0, dist0 = 0;
+    surface.addEventListener('pointerdown', (e) => {
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try { surface.setPointerCapture(e.pointerId); } catch (err) { /* 合成イベント */ }
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        pinch0 = Math.hypot(a.x - b.x, a.y - b.y);
+        dist0 = ph.dist;
+      }
+    });
+    surface.addEventListener('pointermove', (e) => {
+      const o = pointers.get(e.pointerId);
+      if (!o) return;
+      if (pointers.size === 1) {
+        ph.yaw -= (e.clientX - o.x) * 0.008;
+        ph.pitch = clamp(ph.pitch + (e.clientY - o.y) * 0.006, -0.15, 1.4);
+      }
+      o.x = e.clientX; o.y = e.clientY;
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinch0 > 0) ph.dist = clamp((dist0 * pinch0) / Math.max(d, 1), 3, 120);
+      }
+    });
+    const up = (e) => pointers.delete(e.pointerId);
+    surface.addEventListener('pointerup', up);
+    surface.addEventListener('pointercancel', up);
+    surface.addEventListener('wheel', (e) => { ph.dist = clamp(ph.dist * (1 + e.deltaY * 0.001), 3, 120); e.preventDefault(); }, { passive: false });
+    this.photoSurface = surface;
+    const shoot = tapButton('📷 撮影', () => this.takePhoto(), 'btn primary', { id: 'btn-photo-shoot' });
+    const close = tapButton('戻る', () => { this.closePhoto(); this.screens.show('pause'); }, 'btn', { id: 'btn-photo-close' });
+    this.overlayEl = h('div', { class: 'overlay-bar', id: 'photo-bar' }, shoot, close);
+    this.overlayHint = h('div', { class: 'overlay-hint' }, 'ドラッグで回転・2 本指（PC はホイール）で拡大縮小');
+    this.root.append(surface, this.overlayEl, this.overlayHint);
+  }
+
+  async takePhoto() {
+    const ph = this.photo;
+    if (!ph) return null;
+    // 描いた直後でないと画面の内容が取れないので、ここで描いてすぐ PNG にする
+    this.renderer.renderOrbit(0, ph.target, ph.yaw, ph.pitch, ph.dist);
+    const blob = await this.renderer.capture();
+    if (!blob) { this.toast('写真を保存できませんでした'); return null; }
+    this.lastPhotoSize = blob.size;
+    const file = new File([blob], `skytilt-${Date.now()}.png`, { type: 'image/png' });
+    if (!this.debug && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'SKY TILT' }).catch(() => {});
+    } else if (!this.debug) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = file.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    }
+    this.toast('写真を保存しました');
+    return blob.size;
+  }
+
+  closePhoto() {
+    this.photo = null;
+    if (this.photoSurface) { this.photoSurface.remove(); this.photoSurface = null; }
+    this.closeOverlay();
+    if (this.renderer && this.flying) this.renderer.setCameraMode(CAMERA_MODES[this.cameraIdx]);
   }
 
   /** HUD に渡す付加情報（射撃の照準・目標、レーダー、相手プレイヤー） */
@@ -899,6 +1210,22 @@ export class App {
       const g = this.ghost.sample(this.sim.t);
       if (g) items.push({ x: g.pos.x, z: g.pos.z, color: '#ffffff', r: 2.5 });
     }
+    if (this.def.category === 'car' && (st.carMode == null || st.carMode === 'drive')) {
+      const t = this.sim.world.terrain.track;
+      if (!this._mapTrackFor || this._mapTrackFor !== t) {
+        this._mapTrackFor = t;
+        const stepN = Math.max(1, Math.floor(t.n / 80));
+        this._mapTrack = t.pts.filter((_, i) => i % stepN === 0);
+      }
+      extra.mapTrack = this._mapTrack;
+      range = clamp(300 + st.groundSpeed * 8, 300, 900);
+      if (st.race) {
+        items.push({ x: st.race.next.x, z: st.race.next.z, color: '#3affb0', r: 4 });
+        for (const rv of this.sim.race.rivals) items.push({ x: rv.pos.x, z: rv.pos.z, color: `#${rv.paint.toString(16).padStart(6, '0')}`, r: 3.5, shape: 'tri' });
+      }
+      if (st.parking && st.parking.box) { items.push({ x: st.parking.box.x, z: st.parking.box.z, color: '#ffc23a', r: 4, shape: 'square' }); range = 200; }
+    }
+    if (this.lesson) extra.lesson = this.lesson.view();
     extra.mapItems = items;
     extra.mapRange = range;
     return extra;
@@ -917,7 +1244,7 @@ export class App {
   updateHudBounds() {
     // 下側の操作 UI（左右どちらに置かれていても）の内側を HUD の範囲にする
     const W = this.hud.W;
-    const rects = [this.controls.leftZone, this.controls.thrEl, this.controls.weaponZone]
+    const rects = [this.controls.leftZone, this.controls.thrEl, this.controls.weaponZone, this.controls.pedalZone]
       .filter((e) => e.style.display !== 'none').map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
     const lefts = rects.filter((r) => r.left + r.right < W);
     const rights = rects.filter((r) => r.left + r.right >= W);
@@ -988,6 +1315,9 @@ export class App {
         return app.sim.getState();
       },
       setRealtime(on) { app.manual = !on; app.last = performance.now(); },
+      progress() { app.progress.flush(); return { stats: app.progress.stats, unlocked: app.progress.unlocked }; },
+      lesson() { return app.lesson ? app.lesson.view() : null; },
+      async photo() { return app.takePhoto(); },
       /** 描画を止める（物理・送受信は続く）。描画の重い環境で通信遅延だけを測るため */
       setRenderPaused(on) { app.renderPaused = !!on; },
       warp() { return app.warp; },
@@ -1026,7 +1356,9 @@ export class App {
 }
 
 function fmtTimeS(t) {
-  const m = Math.floor(t / 60);
+  const tenths = Math.round(t * 10);
+  const m = Math.floor(tenths / 600);
+  t = m * 60 + (tenths - m * 600) / 10;
   return `${m}:${(t - m * 60).toFixed(1).padStart(4, '0')}`;
 }
 

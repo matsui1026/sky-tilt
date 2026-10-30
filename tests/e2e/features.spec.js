@@ -132,10 +132,10 @@ test('操作ガイド: 共通と全機体の説明、ボタンの説明', async 
   expect(errors).toEqual([]);
 });
 
-test('新しい機体: 熱気球はリング・射撃を選べない／機体カード 12 枚', async ({ page }) => {
+test('新しい機体: 熱気球はリング・射撃を選べない／機体カード 18 枚', async ({ page }) => {
   await openApp(page);
   await page.click('#btn-start');
-  await expect(page.locator('[data-vehicle]')).toHaveCount(12);
+  await expect(page.locator('[data-vehicle]')).toHaveCount(18);
   await page.click('[data-vehicle="balloon"]');
   await page.click('#btn-vehicle-next');
   await expect(page.locator('[data-test="mode-rings"]')).toBeDisabled();

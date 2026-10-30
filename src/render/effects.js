@@ -183,7 +183,12 @@ export class CameraRig {
     const heading = info.heading;
     const levelQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -heading);
     let followQ;
-    if (def.model === 'fixedwing') {
+    const isCar = def.model === 'car' || (def.model === 'flycar' && info.carMode !== 'fly');
+    if (isCar) {
+      // 車: 進む向きへ少し寄せて、ドリフト中は車体の横が見える。路面の上り下りに少し追従
+      const yaw = heading + clamp(info.beta || 0, -0.9, 0.9) * 0.55;
+      followQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -yaw).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), info.pitch * 0.6));
+    } else if (def.model === 'fixedwing') {
       followQ = vq.clone();
       // ロールは半分だけ追従
       followQ.slerp(levelQ.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), info.pitch * 0.9)), 0.45);
@@ -195,7 +200,7 @@ export class CameraRig {
       this.orbit = heading + Math.PI * 0.75;
       this.initialized = true;
     }
-    const k = 1 - Math.exp(-dt / (def.model === 'fixedwing' ? 0.12 : 0.35));
+    const k = 1 - Math.exp(-dt / (def.model === 'fixedwing' ? 0.12 : isCar ? 0.16 : 0.35));
     this.q.slerp(followQ, k);
 
     if (this.mode === 'cockpit') {
@@ -219,7 +224,8 @@ export class CameraRig {
       cam.lookAt(vpos);
       cam.near = 0.5;
     } else {
-      const back = new THREE.Vector3(0, C.chaseHeight, C.chaseDist).applyQuaternion(this.q);
+      const ds = this.distScale ?? 1;
+      const back = new THREE.Vector3(0, C.chaseHeight * ds, C.chaseDist * ds).applyQuaternion(this.q);
       const target = vpos.clone().add(back);
       if (target.y < info.ground + 1.5) target.y = info.ground + 1.5;
       cam.position.copy(target);
@@ -245,7 +251,9 @@ export class CameraRig {
     }
 
     // FOV: 速度に応じて広げる
-    const target = C.fovBase + clamp((info.speed - 25) / 230, 0, 1) * 16 + (info.ab ? 4 : 0);
+    const target = isCar
+      ? C.fovBase + clamp((info.speed - 8) / 80, 0, 1) * 16 + (info.nitro ? 7 : 0)
+      : C.fovBase + clamp((info.speed - 25) / 230, 0, 1) * 16 + (info.ab ? 4 : 0);
     this.fov += (target - this.fov) * (1 - Math.exp(-dt / 0.5));
     cam.fov = this.fov;
     cam.updateProjectionMatrix();

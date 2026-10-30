@@ -1,5 +1,5 @@
 // シミュレーション本体（固定タイムステップ 60Hz）。DOM / Three.js 非依存。
-import { DEG, RAD, clamp, attitudeOf, vlen } from './math.js';
+import { DEG, RAD, clamp, attitudeOf, vlen, wrapPi } from './math.js';
 import { World, airDensity } from './world.js';
 import { Terrain } from './terrain.js';
 import { getVehicle } from '../data/vehicles.js';
@@ -11,6 +11,8 @@ import { createJetsuit, stepJetsuit, jetsuitHoverThrottle } from './vehicles/jet
 import { createHuman, stepHuman, humanDeploy } from './vehicles/human.js';
 import { createBalloon, stepBalloon, hoverBurner, airTemp } from './vehicles/balloon.js';
 import { createFlycar, stepFlycar, flycarToggleMode, flycarHoverThrottle } from './vehicles/flycar.js';
+import { createCar, stepCar, carRecover, SURFACES } from './vehicles/car.js';
+import { RaceMode, DriftMode, ParkingMode } from './carModes.js';
 import { createRingCourse, RingTracker, rateLanding, ringApproach } from './modes.js';
 import { Combat } from './combat.js';
 import { fieldLocal } from './terrainGen.js';
@@ -25,7 +27,11 @@ const MODELS = {
   human: { create: createHuman, step: stepHuman },
   balloon: { create: createBalloon, step: stepBalloon },
   flycar: { create: createFlycar, step: stepFlycar },
+  car: { create: createCar, step: stepCar },
 };
+
+/** アシストの強さ（設定の 3 段階） */
+const CAR_ASSIST = { high: 0.9, mid: 0.55, off: 0 };
 
 const terrainCache = new Map();
 export function getTerrain(locationId, seed) {
@@ -43,7 +49,7 @@ export function getTerrain(locationId, seed) {
 export function contactOffset(def) {
   const P = def.p;
   if (def.model === 'fixedwing') return P.ground.gearHeight;
-  if (def.model === 'heli' || def.model === 'jetsuit' || def.model === 'flycar') return P.cgHeight;
+  if (def.model === 'heli' || def.model === 'jetsuit' || def.model === 'flycar' || def.model === 'car') return P.cgHeight;
   if (def.model === 'balloon') return P.basketHeight;
   return 0.9;
 }
@@ -55,7 +61,7 @@ export class Simulation {
   }
 
   /**
-   * opts: { seed, time, weather, mode, calm, thermals, pvp, rings(リング列を外から与える),
+   * opts: { seed, time, weather, mode, calm, thermals, pvp, rings(リング列を外から与える), carAssist, rivals, laps,
    *         spawn: {pos, heading(deg), speed, onGround, throttle, phase} }
    */
   load(vehicleId, locationId, opts = {}) {
@@ -74,7 +80,7 @@ export class Simulation {
     this.crashCause = null;
     this.result = null;
     const spawn = this.computeSpawn(opts.spawn);
-    if (opts.spawnOffset) {
+    if (opts.spawnOffset && !spawn.noOffset) {
       // 2 人プレイのゲスト: ホストの右後ろに並ぶ（地上なら横に 22 m）
       const hd = spawn.heading || 0;
       const rx = Math.cos(hd), rz = Math.sin(hd);
@@ -96,6 +102,8 @@ export class Simulation {
       fire: false,
       burner: false,
       vent: false,
+      gas: 0, brake: 0, handbrake: false, nitro: false,
+      autopilot: false,
     };
     this.tracker = null;
     this.rings = [];
@@ -110,11 +118,18 @@ export class Simulation {
       ? new Combat(this.world, def, { pvp: !!opts.pvp, spawn: { pos: { ...spawn.pos }, heading: spawn.heading }, difficulty: opts.difficulty, targets: opts.targets })
       : null;
     this._stillT = 0;
+    // 車のモード
+    const carMode = def.model === 'car' || def.model === 'flycar';
+    this.race = carMode && this.mode === 'race' ? new RaceMode(this.world, def, { rivals: opts.rivals, difficulty: opts.difficulty, laps: opts.laps, countdown: opts.countdown }) : null;
+    this.driftMode = carMode && this.mode === 'drift' ? new DriftMode({ time: opts.driftTime }) : null;
+    this.parking = carMode && this.mode === 'parking' ? new ParkingMode(this.world) : null;
+    this.coneHit = new Set();
     this._env = {
       world: this.world,
       t: 0,
       emit: (type, data) => this.emit(type, data),
       crash: (cause) => this.crash(cause),
+      carAssist: CAR_ASSIST[opts.carAssist] ?? CAR_ASSIST.mid,
     };
     return this.getState();
   }
@@ -135,6 +150,11 @@ export class Simulation {
     }
     if (type === 'courseFinished') {
       this.result = { type: 'rings', ...data };
+      this.status = 'finished';
+      this.events.push({ type: 'result', t: this.t, result: this.result });
+    }
+    if (type === 'modeFinished') {
+      this.result = data.result;
       this.status = 'finished';
       this.events.push({ type: 'result', t: this.t, result: this.result });
     }
@@ -169,6 +189,10 @@ export class Simulation {
     if (inp.fire != null) c.fire = !!inp.fire;
     if (inp.burner != null) c.burner = !!inp.burner;
     if (inp.vent != null) c.vent = !!inp.vent;
+    if (inp.gas != null) c.gas = clamp(+inp.gas, 0, 1);
+    if (inp.brake != null) c.brake = clamp(+inp.brake, 0, 1);
+    if (inp.handbrake != null) c.handbrake = !!inp.handbrake;
+    if (inp.nitro != null) c.nitro = !!inp.nitro;
   }
 
   /** 機体固有ボタン */
@@ -195,6 +219,15 @@ export class Simulation {
       case 'carMode':
         if (def.model === 'flycar') return flycarToggleMode(def, this.vs, this._env);
         return null;
+      case 'reset':
+        if (def.model === 'car' && this.status === 'flying') { carRecover(def, this.vs, this._env, 'button'); return true; }
+        return false;
+      case 'autopilot':
+        if (!['fixedwing', 'heli', 'flycar', 'jetsuit'].includes(def.model) || this.vs.onGround) return false;
+        c.autopilot = !c.autopilot;
+        if (c.autopilot) this._ap = { alt: this.vs.pos.y, hdg: attitudeOf(this.vs.q).heading };
+        this.emit('notice', { text: c.autopilot ? 'オートパイロット: 高度と方位を保ちます（操作すると解除）' : 'オートパイロット解除' });
+        return c.autopilot;
       case 'missile':
         if (this.combat && this.status === 'flying') return this.combat.fireMissile(this.vs);
         return false;
@@ -210,7 +243,9 @@ export class Simulation {
       if (this.status === 'crashed' || this.status === 'finished') break;
       const prev = { ...this.vs.pos };
       this._env.t = this.t;
+      const restore = this.ctl.autopilot ? this.applyAutopilot() : null;
       model.step(this.def, this.vs, this.ctl, this._env, DT);
+      if (restore) Object.assign(this.ctl, restore);
       if (this.combat && this.status !== 'crashed') {
         this.combat.step(this.vs, this.ctl, this._env, DT);
         for (const e of this.combat.drainEvents()) this.emit(e.type, e);
@@ -225,16 +260,77 @@ export class Simulation {
       }
       this.t += DT;
       this.stepCount++;
+      this.stepCarModes(prev);
       if (this.tracker && this.status === 'flying') this.tracker.update(prev, this.vs.pos, this.t, (ty, d) => this.emit(ty, d));
       if (!Number.isFinite(this.vs.pos.x + this.vs.pos.y + this.vs.pos.z)) this.crash('数値エラー');
     }
     return this;
   }
 
+  /**
+   * オートパイロット: 高度と方位を保つ。操作を大きく入れると解除。
+   * ctl を一時的に書き換えて、戻すべき値を返す（プレイヤーの入力は残す）
+   */
+  applyAutopilot() {
+    const c = this.ctl;
+    if (Math.abs(c.roll) > 0.45 || Math.abs(c.pitch) > 0.45 || this.vs.onGround || this.status !== 'flying') {
+      c.autopilot = false;
+      this.emit('notice', { text: 'オートパイロット解除' });
+      return null;
+    }
+    const restore = { pitch: c.pitch, roll: c.roll, throttle: c.throttle, yaw: c.yaw };
+    const s = this.vs;
+    const att = attitudeOf(s.q);
+    const hdgErr = wrapPi(this._ap.hdg - att.heading);
+    const altErr = this._ap.alt - s.pos.y;
+    if (this.def.model === 'fixedwing') {
+      // 目標バンク（方位のずれに比例、最大 25°）→ エルロン。目標昇降率（高度のずれに比例）→ エレベーター
+      const bankT = clamp(hdgErr * 1.2, -25 * DEG, 25 * DEG);
+      c.roll = clamp((bankT - att.roll) * 2.2, -0.6, 0.6);
+      const vsT = clamp(altErr * 0.15, -5, 5);
+      c.pitch = clamp((vsT - s.vel.y) * 0.1, -0.5, 0.5);
+    } else {
+      // 回転翼など: 水平の速度を消してその場に止まり、向きを保ち、推力で高度を保つ
+      const fh = { x: Math.sin(att.heading), z: -Math.cos(att.heading) };
+      const vf = s.vel.x * fh.x + s.vel.z * fh.z;
+      const vr = s.vel.x * -fh.z + s.vel.z * fh.x;
+      c.pitch = clamp(vf * 0.05, -0.4, 0.4);
+      c.roll = clamp(-vr * 0.05, -0.4, 0.4);
+      c.yaw = clamp(hdgErr * 2, -1, 1);
+      const hover = this.hoverThrottleAt(s.pos.y) ?? 0.5;
+      c.throttle = clamp(hover + altErr * 0.02 - s.vel.y * 0.05, 0, 1);
+    }
+    return restore;
+  }
+
+  /** 車のモードの進行とコーンの判定 */
+  stepCarModes(prev) {
+    const m = this.def.model;
+    if (m !== 'car' && m !== 'flycar') return;
+    const s = this.vs;
+    if (this.status === 'flying' && (m === 'car' || s.mode === 'drive')) {
+      const terr = this.world.terrain;
+      for (let i = 0; i < terr.cones.length; i++) {
+        if (this.coneHit.has(i)) continue;
+        const c = terr.cones[i];
+        const dx = s.pos.x - c.x, dz = s.pos.z - c.z;
+        const r = (this.def.p.bodyRadius || 1) + 0.3;
+        if (dx * dx + dz * dz < r * r && s.pos.y - c.y < 3 && Math.hypot(s.vel.x, s.vel.z) > 1) {
+          this.coneHit.add(i);
+          this.emit('cone', { index: i, vel: { x: s.vel.x, z: s.vel.z } });
+        }
+      }
+    }
+    if (this.status !== 'flying') return;
+    if (this.race) this.race.step(s, prev, this.t, DT, this._env);
+    if (this.driftMode) this.driftMode.step(s, this._env, DT);
+    if (this.parking) this.parking.step(s, this._env, DT);
+  }
+
   /** 着地したあと自力で飛び立てるか */
   canRelaunch() {
     const m = this.def.model;
-    if (m === 'heli' || m === 'jetsuit' || m === 'flycar' || m === 'balloon') return true;
+    if (m === 'heli' || m === 'jetsuit' || m === 'flycar' || m === 'balloon' || m === 'car') return true;
     return m === 'fixedwing' && this.def.p.thrust.type !== 'none';
   }
 
@@ -251,6 +347,15 @@ export class Simulation {
       const sp = { ...override, heading: (override.heading ?? 0) * DEG };
       if (sp.throttle == null) sp.throttle = this.hoverThrottleAt(sp.pos.y) ?? def.spawnAir?.throttle ?? 0;
       return sp;
+    }
+    // 車: コースのスタート地点から（レースは 4 列目 = 最後尾から追い上げる）
+    const carStart = def.model === 'car' || (def.model === 'flycar' && ['race', 'drift', 'parking'].includes(this.mode));
+    if (carStart) {
+      const t = terr.track;
+      const back = this.mode === 'race' ? -4 : 0;
+      const off = this.opts.spawnOffset ? t.width * 0.25 : this.mode === 'race' ? -t.width * 0.2 : 0;
+      const p = t.at(back, off);
+      return { pos: { x: p.x, y: terr.heightAt(p.x, p.z) + contactOffset(def), z: p.z }, heading: p.heading, speed: 0, onGround: true, throttle: 0, gear: true, noOffset: true };
     }
     if (this.mode === 'landing') return this.approachSpawn();
     const airOnly = this.mode === 'rings' || this.mode === 'combat';
@@ -402,6 +507,31 @@ export class Simulation {
       };
     }
     const wind = this.world.baseWindAt(agl);
+    // 地形の警告（今の速度のまま 2〜6 秒先に地面があるか）
+    let terrainWarn = false;
+    if (def.model !== 'car' && !s.onGround && gs > 15 && agl < 800 && s.mode !== 'drive') {
+      for (const dt of [2, 4, 6]) {
+        const px = s.pos.x + s.vel.x * dt, pz = s.pos.z + s.vel.z * dt;
+        const py = s.pos.y + s.vel.y * dt;
+        if (py - Math.max(terr.surfaceAt(px, pz), terr.roofAt(px, pz)) < 15) { terrainWarn = true; break; }
+      }
+      if (this.status !== 'flying' || def.model === 'human' || def.model === 'paraglider' || def.model === 'balloon') terrainWarn = false;
+    }
+    // 着陸の誘導（固定翼の着陸チャレンジ: 3° の進入コースからのずれ）
+    let landingGuide = null;
+    if (this.mode === 'landing' && def.model === 'fixedwing' && !s.onGround) {
+      const aim = -(field.length / 2 - 300);
+      const dist = aim - fl.u;
+      // 手前に山があるときは、山を越える高さを目標にする（山の向こうで 3° のコースへ降りる）
+      const hd = field.heading * DEG;
+      let clear = -Infinity;
+      for (const look of [0, 200, 400]) {
+        const px = s.pos.x + Math.sin(hd) * look, pz = s.pos.z - Math.cos(hd) * look;
+        if (look <= dist) clear = Math.max(clear, terr.surfaceAt(px, pz) + 80);
+      }
+      const target = Math.max(field.elevation + Math.max(dist, 0) * Math.tan(3 * DEG), clear);
+      if (dist > -100) landingGuide = { dist, gsDev: s.pos.y - contactOffset(def) - target, locDev: fl.v };
+    }
     const res = {
       t: this.t,
       step: this.stepCount,
@@ -444,10 +574,38 @@ export class Simulation {
       wind,
       target: { x: field.x, z: field.z, elevation: field.elevation, dist: Math.hypot(s.pos.x - field.x, s.pos.z - field.z), u: fl.u, v: fl.v },
       rings,
+      terrainWarn,
+      landingGuide,
+      autopilot: !!this.ctl.autopilot,
+      precip: this.world.weather.precip || null,
       combat: this.combat ? this.combat.summary(s.pos) : null,
       result: this.result,
       outOfBounds: Math.abs(s.pos.x) > terr.half || Math.abs(s.pos.z) > terr.half,
     };
+    if (def.model === 'car' || (def.model === 'flycar' && s.drift)) {
+      const d = s.drift;
+      res.car = {
+        speedKmh: Math.hypot(s.vx ?? 0, s.vy ?? 0) * 3.6,
+        gear: s.rev ? 'R' : s.gear,
+        rpm: s.rpm ?? 0,
+        nitro: s.nitro ?? 0,
+        nitroOn: !!s.nitroOn,
+        hasNitro: !!def.p.drive.nitro,
+        gas: s.gas ?? 0,
+        brake: s.brakeIn ?? 0,
+        handbrake: !!s.handbrake,
+        steer: s.steer ?? 0,
+        slip: Math.max(s.slipR ?? 0, s.wheelSpin ?? 0),
+        beta: (s.slide ?? s.beta ?? 0) * RAD,
+        surface: s.surface,
+        surfaceName: (SURFACES[s.surface] || SURFACES.asphalt).name,
+        air: !!s.air,
+        drift: d ? { active: d.active, angle: d.angle, score: Math.round(d.score), mult: d.mult, total: d.total, best: d.best } : null,
+      };
+    }
+    if (this.race) res.race = this.race.summary();
+    if (this.driftMode) res.driftMode = this.driftMode.summary(s);
+    if (this.parking) res.parking = this.parking.summary(s);
     if (def.model === 'balloon') {
       res.balloon = {
         temp: s.temp - 273.15,
