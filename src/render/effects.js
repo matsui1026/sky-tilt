@@ -11,7 +11,7 @@ export function createSpeedLines() {
   const pos = new Float32Array(N * 6);
   for (let i = 0; i < N; i++) {
     const a = rnd() * Math.PI * 2;
-    const r = 2.2 + rnd() * 5;
+    const r = 3.6 + rnd() * 6.5; // 画面の中央は空けて、周辺だけに流す
     seeds.push({ x: Math.cos(a) * r, y: Math.sin(a) * r * 0.6, z: -rnd() * 60, len: 2 + rnd() * 5 });
   }
   const geo = new THREE.BufferGeometry();
@@ -24,7 +24,7 @@ export function createSpeedLines() {
   return {
     object: lines,
     update(dt, speed, intensity) {
-      mat.opacity = intensity * 0.45;
+      mat.opacity = intensity * 0.26;
       lines.visible = intensity > 0.01;
       if (!lines.visible) return;
       const a = geo.attributes.position.array;
@@ -32,7 +32,7 @@ export function createSpeedLines() {
         const s = seeds[i];
         s.z += speed * dt * 0.5;
         if (s.z > 0) s.z -= 60;
-        const len = s.len * (0.5 + intensity * 2);
+        const len = s.len * (0.5 + intensity * 1.3);
         a[i * 6] = s.x; a[i * 6 + 1] = s.y; a[i * 6 + 2] = s.z;
         a[i * 6 + 3] = s.x; a[i * 6 + 4] = s.y; a[i * 6 + 5] = s.z - len;
       }

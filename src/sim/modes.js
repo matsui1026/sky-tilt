@@ -10,7 +10,9 @@ export const RING_PENALTY = 5;
 export function modesFor(def) {
   if (def.model === 'balloon') return ['free', 'landing'];
   if (def.model === 'car') return ['free', 'race', 'drift', 'parking'];
-  if (def.model === 'flycar') return ['free', 'race', 'drift', 'parking', 'rings', 'combat', 'landing'];
+  if (def.model === 'flycar') return ['free', 'race', 'drift', 'parking', 'rings', 'stunt', 'combat', 'landing'];
+  // 曲技: 姿勢を自由に変えられて、飛び続けられる機体
+  if (def.model === 'fixedwing' || def.model === 'heli' || def.model === 'jetsuit') return ['free', 'rings', 'stunt', 'combat', 'landing'];
   return ['free', 'rings', 'combat', 'landing'];
 }
 

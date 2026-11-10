@@ -7,6 +7,8 @@ import { buildVehicleModel } from './models.js';
 import { createSpeedLines, createRings, createShadow, CameraRig } from './effects.js';
 import { createCombatView } from './combatView.js';
 import { createTrackView, createPrecip } from './trackView.js';
+import { createStarsView } from './starsView.js';
+import { createAirSmoke } from './airSmoke.js';
 import { clamp, attitudeOf } from '../sim/math.js';
 import { getVehicle } from '../data/vehicles.js';
 
@@ -106,6 +108,12 @@ export class FlightRenderer {
     // 雨・雪
     this.precip = world.weather.precip ? createPrecip(world.weather.precip) : null;
     if (this.precip) scene.add(this.precip.object);
+    // スター集め（フリー）と曲技のスモーク
+    this.starsView = opts.stars ? createStarsView(opts.stars, def.model === 'car' ? 1.1 : Math.max(5, Math.min(11, (def.ringRadius || 20) * 0.3))) : null;
+    if (this.starsView) scene.add(this.starsView.group);
+    this.airSmoke = def.model === 'car' ? null : createAirSmoke({ spacing: Math.max(1.2, Math.min(4, sizeOf(def) * 0.2)) });
+    if (this.airSmoke) scene.add(this.airSmoke.object);
+    this.smokeHex = null;
     this.combatView = combat ? createCombatView(combat) : null;
     if (this.combatView) scene.add(this.combatView.group);
     this.speedLines = createSpeedLines();
@@ -208,6 +216,12 @@ export class FlightRenderer {
   combatEvent(ev) {
     if (this.combatView) this.combatView.event(ev);
     if (this.trackView) this.trackView.event(ev);
+    if (this.starsView) this.starsView.event(ev);
+  }
+
+  /** スモークの色（null で止める） */
+  setSmoke(hex) {
+    this.smokeHex = hex;
   }
 
   /**
@@ -271,6 +285,12 @@ export class FlightRenderer {
     if (this.combatView) this.combatView.update(dt, this.t);
     if (this.trackView) this.trackView.update(state, vs, dt, this.simRace);
     if (this.precip) this.precip.update(dt, this.camera.position, state.vel);
+    if (this.starsView) this.starsView.update(dt, this.t);
+    if (this.airSmoke) {
+      // 機体の後ろの端から出す
+      const back = _tmpV.set(0, 0, (m.root.userData.size || sizeOf(this.def)) * 0.45).applyQuaternion(vq).add(vp);
+      this.airSmoke.update(this.t, this.smokeHex != null && state.status === 'flying' && !state.onGround, this.smokeHex ?? 0xffffff, back);
+    }
     const beacon = this.terrain.target.getObjectByName('beacon');
     if (beacon) beacon.material.opacity = 0.12 + 0.1 * (0.5 + 0.5 * Math.sin(this.t * 2));
 
@@ -363,6 +383,8 @@ export class FlightRenderer {
     return { calls: r.calls, triangles: r.triangles, points: r.points, lines: r.lines, geometries: this.renderer.info.memory.geometries, textures: this.renderer.info.memory.textures, pixelRatio: this.renderer.getPixelRatio() };
   }
 }
+
+const _tmpV = new THREE.Vector3();
 
 function sizeOf(def) {
   return { prop: 11, airliner: 36, fighter: 12, sailplane: 17, heli: 10, drone: 0.6, flycar: 5.5, balloon: 14, paraglider: 4, jetsuit: 2, wingsuit: 3, skydive: 2.5 }[def.id] || 5;

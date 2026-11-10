@@ -15,6 +15,9 @@ import { createCar, stepCar, carRecover, SURFACES } from './vehicles/car.js';
 import { RaceMode, DriftMode, ParkingMode } from './carModes.js';
 import { createRingCourse, RingTracker, rateLanding, ringApproach } from './modes.js';
 import { Combat } from './combat.js';
+import { StuntTracker, stuntEligible } from './stunts.js';
+import { createStars, starKind, starRadius, segmentDist } from './stars.js';
+import { CRUISE } from './modes.js';
 import { fieldLocal } from './terrainGen.js';
 
 export const DT = 1 / 60;
@@ -124,6 +127,16 @@ export class Simulation {
     this.driftMode = carMode && this.mode === 'drift' ? new DriftMode({ time: opts.driftTime }) : null;
     this.parking = carMode && this.mode === 'parking' ? new ParkingMode(this.world) : null;
     this.coneHit = new Set();
+    // 曲技の採点（フリーと曲技モード）。opts.stunts === false で切る（練習モードなど）
+    this.stunts = stuntEligible(def) && (this.mode === 'free' || this.mode === 'stunt') && opts.stunts !== false
+      ? new StuntTracker(def, this.world, { timeLimit: this.mode === 'stunt' ? (opts.stuntTime ?? 90) : null, cruise: CRUISE[def.id], contact: contactOffset(def) })
+      : null;
+    // スター集め（フリー）。opts.stars: すでに集めた番号の配列（null なら出さない）
+    this.stars = null;
+    if (this.mode === 'free' && Array.isArray(opts.stars)) {
+      const list = createStars(this.world, starKind(def));
+      this.stars = { list, got: new Set(opts.stars.filter((i) => Number.isInteger(i) && i >= 0 && i < list.length)), r: starRadius(def) };
+    }
     this._env = {
       world: this.world,
       t: 0,
@@ -141,7 +154,7 @@ export class Simulation {
   emit(type, data = {}) {
     this.events.push({ ...data, type, t: this.t });
     // 空飛ぶ車は自由飛行で着地しても走り続けられるので評価を出さない（着陸モードのみ）
-    const rateIt = this.mode !== 'combat' && !(this.def.model === 'flycar' && this.mode !== 'landing');
+    const rateIt = this.mode !== 'combat' && this.mode !== 'stunt' && !(this.def.model === 'flycar' && this.mode !== 'landing');
     if (type === 'landed' && this.status === 'flying' && rateIt) {
       const r = rateLanding(this.def, data, this.world.terrain.field);
       this.result = { type: 'landing', mode: this.mode, ...r };
@@ -170,6 +183,7 @@ export class Simulation {
     this.status = 'crashed';
     this.crashCause = cause;
     this.vs.crashed = true;
+    if (this.stunts) this.stunts.lose();
     this.events.push({ type: 'crash', t: this.t, cause, pos: { ...this.vs.pos } });
   }
 
@@ -261,6 +275,8 @@ export class Simulation {
       this.t += DT;
       this.stepCount++;
       this.stepCarModes(prev);
+      if (this.stunts && this.status === 'flying') this.stunts.step(this.vs, DT, (ty, d) => this.emit(ty, d));
+      if (this.stars && this.status === 'flying') this.stepStars(prev);
       if (this.tracker && this.status === 'flying') this.tracker.update(prev, this.vs.pos, this.t, (ty, d) => this.emit(ty, d));
       if (!Number.isFinite(this.vs.pos.x + this.vs.pos.y + this.vs.pos.z)) this.crash('数値エラー');
     }
@@ -301,6 +317,22 @@ export class Simulation {
       c.throttle = clamp(hover + altErr * 0.02 - s.vel.y * 0.05, 0, 1);
     }
     return restore;
+  }
+
+  /** スターを取ったか（前ステップからの線分で判定） */
+  stepStars(prev) {
+    const st = this.stars;
+    if (st.got.size >= st.list.length) return;
+    const p = this.vs.pos;
+    for (let i = 0; i < st.list.length; i++) {
+      if (st.got.has(i)) continue;
+      const s = st.list[i].pos;
+      if (Math.abs(s.x - p.x) > 400 || Math.abs(s.z - p.z) > 400) continue;
+      if (segmentDist(prev, p, s) <= st.r) {
+        st.got.add(i);
+        this.emit('star', { index: i, pos: { ...s }, got: st.got.size, total: st.list.length, complete: st.got.size >= st.list.length });
+      }
+    }
   }
 
   /** 車のモードの進行とコーンの判定 */
@@ -358,7 +390,7 @@ export class Simulation {
       return { pos: { x: p.x, y: terr.heightAt(p.x, p.z) + contactOffset(def), z: p.z }, heading: p.heading, speed: 0, onGround: true, throttle: 0, gear: true, noOffset: true };
     }
     if (this.mode === 'landing') return this.approachSpawn();
-    const airOnly = this.mode === 'rings' || this.mode === 'combat';
+    const airOnly = this.mode === 'rings' || this.mode === 'combat' || this.mode === 'stunt';
     if (!airOnly && def.groundStart && (field.type === 'runway' || def.groundStartAnywhere)) {
       const along = def.model === 'fixedwing' ? -(field.length / 2 - 80) : -(field.length / 2 - 30);
       return {
@@ -602,6 +634,18 @@ export class Simulation {
         air: !!s.air,
         drift: d ? { active: d.active, angle: d.angle, score: Math.round(d.score), mult: d.mult, total: d.total, best: d.best } : null,
       };
+    }
+    if (this.stunts) res.stunt = this.stunts.summary();
+    if (this.stars) {
+      const sl = this.stars;
+      let nearest = null;
+      for (let i = 0; i < sl.list.length; i++) {
+        if (sl.got.has(i)) continue;
+        const p = sl.list[i].pos;
+        const d = Math.hypot(p.x - s.pos.x, p.y - s.pos.y, p.z - s.pos.z);
+        if (!nearest || d < nearest.dist) nearest = { index: i, x: p.x, y: p.y, z: p.z, dist: d };
+      }
+      res.stars = { total: sl.list.length, got: sl.got.size, nearest };
     }
     if (this.race) res.race = this.race.summary();
     if (this.driftMode) res.driftMode = this.driftMode.summary(s);

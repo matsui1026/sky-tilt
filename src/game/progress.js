@@ -20,6 +20,13 @@ export const ACHIEVEMENTS = [
   { id: 'jump', name: '大ジャンプ', desc: '車で 2.5 秒以上空中にいる', test: (s) => s.bestAir >= 2.5 },
   { id: 'park_s', name: '駐車の達人', desc: '駐車チャレンジで S 評価', test: (s) => s.parkS >= 1 },
   { id: 'sea', name: '海を渡る', desc: 'ホバーカーで水の上を 2 km 走る', test: (s) => s.waterKm >= 2 },
+  { id: 'loop', name: '初めての宙返り', desc: '宙返りを 1 回決める', test: (s) => s.loops >= 1 },
+  { id: 'rolls_20', name: 'ロール職人', desc: 'ロールを合計 20 回決める', test: (s) => s.rolls >= 20 },
+  { id: 'low_60', name: '地を這う', desc: '超低空飛行を合計 60 秒', test: (s) => s.lowSeconds >= 60 },
+  { id: 'combo_3k', name: 'コンボマスター', desc: '曲技の 1 コンボで 3,000 点', test: (s) => s.stuntBest >= 3000 },
+  { id: 'stunt_s', name: 'エアショーの主役', desc: '曲技モードで S 評価', test: (s) => s.stuntS >= 1 },
+  { id: 'stars_10', name: 'スターハンター', desc: 'スターを合計 10 個集める', test: (s) => s.stars >= 10 },
+  { id: 'stars_set', name: 'コンプリート', desc: '1 つのロケーションのスターをすべて集める', test: (s) => s.starSets >= 1 },
   { id: 'daily_3', name: '毎日パイロット', desc: '今日のチャレンジを 3 日クリア', test: (s) => (s.dailyDays || []).length >= 3 },
   { id: 'student', name: '卒業', desc: '練習モードをすべて終える', test: (s, ctx) => (s.lessons || []).length >= ctx.lessonCount },
 ];
@@ -27,6 +34,7 @@ export const ACHIEVEMENTS = [
 const EMPTY = {
   takeoffs: 0, landings: 0, landingS: 0, rings: 0, kills: 0, balloons: 0, distanceKm: 0, nightMinutes: 0, badWeatherMinutes: 0,
   flightMinutes: 0, driveMinutes: 0, driftBest: 0, driftTotal: 0, raceWins: 0, raceWinsHard: 0, races: 0, cones: 0, bestAir: 0, parkS: 0, waterKm: 0,
+  loops: 0, rolls: 0, lowSeconds: 0, stuntBest: 0, stuntS: 0, stars: 0, starSets: 0,
   crashes: 0, vehicles: [], locations: [], dailyDays: [], lessons: [],
 };
 

@@ -109,7 +109,8 @@ export class ThrottleSlider {
     if (user && Math.floor(nv * 10) !== Math.floor(this.value * 10)) haptic(5);
     this.value = nv;
     this.fill.style.height = `${nv * 100}%`;
-    this.knob.style.bottom = `calc(${nv * 100}% - ${nv * 44}px)`;
+    // 上端はラベルの分（18px）を空ける（100% のときにラベルが隠れないように）
+    this.knob.style.bottom = `calc(${nv * 100}% - ${nv * 62}px)`;
     if (this.onChange) this.onChange(nv, user);
   }
 }

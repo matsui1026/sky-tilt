@@ -3,7 +3,7 @@
 // 角運動は「迎角コマンド」方式: ピッチ入力は目標迎角（＝荷重倍数）を指令し、
 // 機首は速度ベクトルの回転＋迎角誤差の補正で回る。ニュートラルで 1G（経路保持）。
 import {
-  G0, DEG, clamp, lerp, smoothstep, approach,
+  G0, DEG, clamp, lerp, smoothstep, approach, wrapPi,
   vadd, vsub, vscale, vdot, vcross, vlen, vnorm, qrot, qrotInv, qintegrateBody, qmul, qaxis,
   FWD, UP, RIGHT, attitudeOf, quatFromAttitude,
 } from '../math.js';
@@ -179,7 +179,10 @@ export function stepFixedWing(def, s, ctl, env, dt) {
   if (R.bankCmd) {
     // 練習機: 傾け量 → 目標バンク角（傾けたまま持てばそのバンク角で安定し、戻せば水平に戻る）
     const lim = R.maxRate * Math.max(eff, 0.15);
-    pCmd = clamp(R.bankGain * (ctl.roll * R.bankCmd - bank), -lim, lim);
+    // 背面（宙返りの頂点）で引き続けている間は、水平へ戻さず背面のまま翼を水平に保つ（宙返りを最後まで回れる）
+    const looping = Math.abs(bank) > 90 * DEG && ctl.pitch > 0.3;
+    const bankErr = looping ? wrapPi(Math.sign(bank) * Math.PI - bank) : ctl.roll * R.bankCmd - bank;
+    pCmd = clamp(R.bankGain * bankErr, -lim, lim);
   } else {
     pCmd = ctl.roll * R.maxRate * eff;
     if (R.autoLevel && Math.abs(ctl.roll) < 0.02 && Math.abs(bank) < 80 * DEG) pCmd += -R.autoLevel * bank;

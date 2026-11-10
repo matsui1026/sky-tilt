@@ -128,13 +128,14 @@ export const WEATHER_ORDER = ['clear', 'cloudy', 'windy', 'rain', 'snowfall', 'f
 export const MODES = {
   free: { id: 'free', name: 'フリー' },
   rings: { id: 'rings', name: 'リング' },
+  stunt: { id: 'stunt', name: '曲技' },
   combat: { id: 'combat', name: '射撃' },
   landing: { id: 'landing', name: '着陸' },
   race: { id: 'race', name: 'レース' },
   drift: { id: 'drift', name: 'ドリフト' },
   parking: { id: 'parking', name: '駐車' },
 };
-export const MODE_ORDER = ['free', 'race', 'drift', 'parking', 'rings', 'combat', 'landing'];
+export const MODE_ORDER = ['free', 'race', 'drift', 'parking', 'rings', 'stunt', 'combat', 'landing'];
 
 export function getLocation(id) {
   const l = LOCATIONS[id];

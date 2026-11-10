@@ -179,6 +179,7 @@ export class Hud {
   drawCommon(st, extra) {
     const W = this.W, H = this.H;
     let wy = st.combat ? 128 : 92;
+    wy = Math.max(wy, this.drawStunt(st));
     const def = this.def;
     if (st.status === 'flying') {
       if (st.stallWarn && def.model === 'fixedwing' && !st.onGround) { this.warning(def.id === 'airliner' ? 'STALL' : '失速！', wy); wy += 42; }
@@ -206,7 +207,26 @@ export class Hud {
     if (st.mode === 'landing' && st.status === 'flying' && extra.camera) {
       this.pointer({ x: st.target.x, y: st.target.elevation, z: st.target.z }, extra, '#ffb040', `${(st.target.dist / 1000).toFixed(2)} km`);
     }
+    // スター集め: いちばん近い星
+    if (extra.star && extra.camera && st.status === 'flying') this.pointer(extra.star, extra, '#ffd84a', `★ ${fmtDist(extra.star.dist)}`);
     if (extra.recalHint) this.text(extra.recalHint, W / 2, H - 70, { size: 13, color: '#ffe08a' });
+  }
+
+  /** 曲技: いまのコンボ（確定前）と、曲技モードの残り時間・合計。戻り値は警告を出し始める高さ（0 なら既定） */
+  drawStunt(st) {
+    const s = st.stunt;
+    if (!s || st.rings || st.combat || st.status !== 'flying') return 0;
+    let y = 66;
+    if (s.left != null) {
+      this.statusLine([`残り ${fmtTime(s.left)}`, `合計 ${s.total.toLocaleString()}`, s.bestCombo ? `最高コンボ ${s.bestCombo.toLocaleString()}` : null], 74);
+      y = 100;
+    }
+    if (s.count === 0) return s.left != null ? 112 : 0;
+    // 確定が近づくと薄くなる
+    const col = `rgba(255,216,74,${(0.45 + 0.55 * s.hold).toFixed(2)})`;
+    this.text(`${s.combo.toLocaleString()}${s.mult > 1 ? `  ×${s.mult}` : ''}`, this.cx, y + 10, { size: 24, weight: 900, color: col });
+    if (s.last) this.text(`${s.last.name}  +${s.last.points}`, this.cx, y + 31, { size: 13, weight: 800, color: col });
+    return y + 64;
   }
 
   /** 画面外/画面内の目標を矢印・マーカーで示す */
@@ -694,6 +714,7 @@ export class Hud {
     const [nx, ny] = [x0 - sh * (R - 7), y0 - ch * (R - 7)];
     this.text('N', nx, ny, { size: 10, color: '#ff8a7a' });
     this.text(range >= 1000 ? `${(range / 1000).toFixed(range >= 3000 ? 0 : 1)}km` : `${range}m`, x0, y0 + R - 9, { size: 9, color: 'rgba(220,230,240,0.75)', weight: 600, shadow: false });
+    if (st.stars && !extra.net) this.text(`★ ${st.stars.got}/${st.stars.total}`, x0, y0 + R + 10, { size: 11, color: '#ffd84a', weight: 800 });
     // 2 人プレイ: 通信の往復時間
     if (extra.net) {
       const rtt = extra.net.rtt;

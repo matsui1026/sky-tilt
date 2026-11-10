@@ -57,7 +57,7 @@ const PC_KEYS = [
   ['W / ↑', '機首下げ（奥へ倒す）'], ['S / ↓', '機首上げ（手前に引く）'], ['A D / ← →', 'ロール（左右）'], ['Q / E', 'ヨー・ラダー'],
   ['Shift / Ctrl', 'スロットル 上げ / 下げ'], ['F', 'フラップ'], ['G', 'ギア'], ['X', 'スポイラー・エアブレーキ'], ['B', 'アフターバーナー'],
   ['Space', 'パラシュート'], ['T', '飛行 ⇄ 走行'], ['K / Enter', '射撃（押している間）'], ['M', 'ミサイル'], ['H / J', 'バーナー / 排気弁'],
-  ['C', '視点切替'], ['R', '再キャリブレーション'], ['Y', '早送り（熱気球・滑空機）'], ['L', 'オートパイロット'], ['Esc / P', '一時停止'],
+  ['C', '視点切替'], ['R', '再キャリブレーション'], ['Y', '早送り（熱気球・滑空機）'], ['L', 'オートパイロット'], ['O', 'スモーク（押すたびに色が変わる）'], ['Esc / P', '一時停止'],
   ['車: W / S', 'アクセル / ブレーキ（押し続けるとバック）'], ['車: A D', 'ハンドル'], ['車: Space', 'サイドブレーキ'], ['車: N', 'ニトロ'], ['車: V', '復帰'],
 ];
 const PAD_KEYS = [['左スティック', 'ロール・ピッチ'], ['右スティック上下', 'スロットル'], ['LB / RB', 'ヨー'], ['A / RT', '射撃・バーナー（押している間）'], ['LT', '排気弁（熱気球）'], ['B', '機体ボタン（ラダー以外の最初のボタン）'], ['X', 'ミサイル'], ['Y', '視点'], ['Back', '早送り'], ['Start', '一時停止'], ['車: RT / LT', 'アクセル / ブレーキ（アナログ）'], ['車: A', 'サイドブレーキ'], ['車: X', 'ニトロ']];
@@ -266,6 +266,7 @@ export class Screens {
     else if (s.vehicle === 'hover') msg = 'ホバーカーは水の上も走れます';
     else if (s.weather === 'fog') msg = '霧で遠くが見えません。レーダーと HUD の矢印を頼りに';
     else if (s.weather === 'windy' && s.vehicle === 'paraglider') msg = '⚠ 強風（13 m/s）はパラグライダーの速度（約 10 m/s）より速く、前に進めず押し戻されます';
+    else if (s.mode === 'stunt') msg = v.model === 'fixedwing' && v.p.roll.bankCmd ? '90 秒の曲技。宙返り（速度をつけて手前に引き続ける）・超低空・谷やビルのすり抜けをつなぐと倍率アップ' : v.id === 'airliner' ? '90 秒の曲技。旅客機は保護機能で宙返り・ロールができません。超低空とすり抜けで稼ごう' : '90 秒の曲技。ロール・宙返り・背面・ナイフエッジ・超低空・すり抜けをつなぐと倍率アップ（最大 ×5）';
     else if (s.mode === 'combat' && !v.weapon) msg = 'この機体は武器がありません。風船に体当たりして割りましょう';
     else if (s.mode === 'combat') msg = `武器: ${v.weapon.name}${v.weapon.missiles ? '・追尾ミサイル' : ''}。風船・地上の的・敵機を撃ち落とす`;
     else if (s.vehicle === 'balloon') msg = '熱気球はリングコース・射撃では遊べません。高さごとの風を使って目標へ';
@@ -331,6 +332,7 @@ export class Screens {
     toggle('cameraShake', 'カメラの揺れ');
     toggle('minimap', 'レーダー');
     toggle('ghost', 'ゴースト');
+    toggle('stars', 'スター集め（フリー）');
     choice('quality', '画質', { auto: '自動', high: '高', low: '低（省電力）' }, 'quality-');
     choice('difficulty', '射撃の難易度', { easy: 'やさしい', normal: 'ふつう', hard: 'むずかしい' }, 'difficulty-');
     toggle('lefty', '左利き配置（スティックを右に）');
@@ -521,6 +523,8 @@ export class Screens {
             ...stat('撃墜', `${s.kills} 機`),
             ...stat('ドリフト', `最高 ${s.driftBest.toLocaleString()} 点 ／ 合計 ${s.driftTotal.toLocaleString()} 点`),
             ...stat('レース', `${s.races} 回（優勝 ${s.raceWins} 回）`),
+            ...stat('曲技', `宙返り ${s.loops} 回・ロール ${s.rolls} 回 ／ 最高コンボ ${s.stuntBest.toLocaleString()} 点`),
+            ...stat('スター', `${s.stars} 個`),
             ...stat('乗った機体', `${s.vehicles.length} / ${VEHICLE_ORDER.length}`),
             ...stat('墜落', `${s.crashes} 回`)))),
     );
@@ -681,6 +685,19 @@ export class Screens {
           h('div', { style: { fontSize: '32px', fontWeight: '900' }, id: 'result-score' }, `${res.score.toLocaleString()} 点`),
           h('div', { class: 'stat-grid' },
             h('span', { class: 'k' }, '1 回の最高'), h('span', {}, `${res.bestRun.toLocaleString()} 点`),
+            h('span', { class: 'k' }, '自己ベスト'), h('span', {}, res.best != null ? `${res.best.toLocaleString()} 点` : '—')),
+          res.newBest ? h('div', { style: { color: '#ffd84a', fontWeight: '800' } }, '新記録！') : null));
+    } else if (res.type === 'stunt') {
+      title = 'タイムアップ！';
+      const names = { roll: 'ロール', loop: '宙返り', inverted: '背面飛行', knife: 'ナイフエッジ', low: '超低空', gap: 'すり抜け', touchgo: 'タッチ＆ゴー' };
+      const done = Object.entries(res.counts || {}).map(([k, n]) => `${names[k] || k} ${n}`).join('・');
+      body = h('div', { class: 'row', style: { gap: '28px', alignItems: 'center' } },
+        h('div', { class: 'col center' }, h('div', { class: `result-grade grade-${res.grade}`, id: 'result-grade' }, res.grade)),
+        h('div', { class: 'col', style: { gap: '6px' } },
+          h('div', { style: { fontSize: '32px', fontWeight: '900' }, id: 'result-score' }, `${res.score.toLocaleString()} 点`),
+          h('div', { class: 'stat-grid' },
+            h('span', { class: 'k' }, '最高コンボ'), h('span', {}, `${res.bestCombo.toLocaleString()} 点`),
+            h('span', { class: 'k' }, '決めた技'), h('span', { style: { maxWidth: '260px' } }, done || 'なし'),
             h('span', { class: 'k' }, '自己ベスト'), h('span', {}, res.best != null ? `${res.best.toLocaleString()} 点` : '—')),
           res.newBest ? h('div', { style: { color: '#ffd84a', fontWeight: '800' } }, '新記録！') : null));
     } else if (res.type === 'parking') {

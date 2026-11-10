@@ -34,6 +34,9 @@ export class FlightControls {
     // オートパイロット（水平飛行を保つ）
     this.apBtn = h('button', { class: 'hbtn ctl', id: 'btn-ap', type: 'button', 'aria-label': 'オートパイロット' }, 'AP');
     bindButton(this.apBtn, { id: 'autopilot', type: 'tap' }, { action: () => cb.onAction('autopilot') });
+    // スモーク（曲技の軌跡。押すたびに色が変わる）
+    this.smokeBtn = h('button', { class: 'hbtn ctl', id: 'btn-smoke', type: 'button', 'aria-label': 'スモーク' }, 'スモーク');
+    bindButton(this.smokeBtn, { id: 'smoke', type: 'tap' }, { action: () => cb.onAction('smoke') });
     this.thrFill = h('div', { id: 'throttle-fill' });
     this.thrKnob = h('div', { id: 'throttle-knob' }, '0%');
     this.thrLabel = h('div', { id: 'throttle-label' }, 'スロットル');
@@ -46,7 +49,7 @@ export class FlightControls {
     this.weaponZone = h('div', { id: 'weapon-zone' }, this.missileBtn, this.fireBtn);
     this.el.append(
       h('div', { id: 'top-left' }, this.pause, this.recal),
-      h('div', { id: 'top-right' }, this.warp, this.apBtn, this.cam),
+      h('div', { id: 'top-right' }, this.warp, this.smokeBtn, this.apBtn, this.cam),
       this.leftZone,
       this.weaponZone,
       this.thrEl,
@@ -67,7 +70,8 @@ export class FlightControls {
 
   /** combat: 射撃モードなら武器ボタンを出す */
   /** car: { pedal, steer } は車の操作設定 */
-  setVehicle(def, { combat = false, warp = false, car = null } = {}) {
+  setVehicle(def, { combat = false, warp = false, car = null, smoke = false } = {}) {
+    this.smokeBtn.style.display = smoke ? '' : 'none';
     const isCar = def.model === 'car';
     const pedal = car ? car.pedal : 'buttons';
     this.pedalZone.style.display = isCar && pedal !== 'tilt' ? '' : 'none';
@@ -100,6 +104,13 @@ export class FlightControls {
   setWarp(k) {
     this.warp.textContent = k > 1 ? `▶▶×${k}` : '▶×1';
     this.warp.classList.toggle('on', k > 1);
+  }
+
+  /** スモークの状態（c: { name, hex } か null） */
+  setSmoke(c) {
+    this.smokeBtn.classList.toggle('on', !!c);
+    this.smokeBtn.innerHTML = c ? `スモーク<span class="sub">${c.name}</span>` : 'スモーク';
+    this.smokeBtn.style.borderColor = c ? `#${c.hex.toString(16).padStart(6, '0')}` : '';
   }
 
   setStickVisible(on) {

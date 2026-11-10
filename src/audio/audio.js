@@ -459,6 +459,15 @@ export class AudioEngine {
       case 'countdown':
         this._beep(ev.n > 0 ? 660 : 1100, ev.n > 0 ? 0.18 : 0.5, 'square', 0.12);
         break;
+      case 'stunt':
+        this._beep(ev.kind === 'loop' || ev.kind === 'touchgo' ? 1320 : 1100, 0.07, 'triangle', 0.1);
+        break;
+      case 'stuntCombo':
+        if (ev.score >= 500) [990, 1320].forEach((f, i) => setTimeout(() => this.ctx && this._beep(f, 0.12, 'triangle', 0.13), i * 90));
+        break;
+      case 'star':
+        [1320, 1760, 2090].forEach((f, i) => setTimeout(() => this.ctx && this._beep(f, 0.1, 'sine', 0.14), i * 70));
+        break;
       case 'checkpoint':
         this._beep(880, 0.08, 'sine', 0.12);
         break;

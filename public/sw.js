@@ -1,6 +1,6 @@
 // オフラインで遊べるようにするサービスワーカー
 // ページ（HTML）はネットワーク優先（更新をすぐ反映）、それ以外の同一オリジンの資源はキャッシュ優先。
-const CACHE = 'skytilt-v3';
+const CACHE = 'skytilt-v4';
 const CORE = ['./', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

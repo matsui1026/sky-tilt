@@ -11,7 +11,7 @@ export function dateKey(d = new Date()) {
 }
 
 /** 点数として比べられるモードだけ（自由飛行は除く） */
-const SCORED = ['race', 'drift', 'parking', 'rings', 'combat', 'landing'];
+const SCORED = ['race', 'drift', 'parking', 'rings', 'stunt', 'combat', 'landing'];
 
 export function dailyChallenge(key = dateKey()) {
   const rnd = mulberry32(hashString(`skytilt-daily-${key}`));
@@ -31,6 +31,7 @@ export function dailyScore(res) {
   switch (res.type) {
     case 'race': return Math.round(100000 / Math.max(res.time, 1) - (res.place - 1) * 100);
     case 'drift': return res.score;
+    case 'stunt': return res.score;
     case 'parking': return res.score;
     case 'rings': return Math.round(100000 / Math.max(res.total, 1));
     case 'combat': return res.score;
