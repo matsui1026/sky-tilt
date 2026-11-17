@@ -66,6 +66,14 @@ export class Combat {
     this.health = 100;
     this.ammo = this.weapon ? this.weapon.ammo : 0;
     this.missilesLeft = this.weapon && this.weapon.missiles ? this.weapon.missiles : 0;
+    this.rocketsLeft = this.weapon && this.weapon.rockets ? this.weapon.rockets : 0;
+    // 受けるダメージの倍率（装甲）
+    this.armor = def.armor ?? 1;
+    // 武装フリー: 'targets'（的だけ）| 'battle'（的＋敵機が次々来る）。終わりがなく、着陸すると補給
+    this.sandbox = opts.sandbox || null;
+    this.lastHitT = -99;
+    this.waveWait = 0;
+    this.refills = 0;
     this.shots = 0;
     this.hits = 0;
     this.kills = 0;
@@ -81,7 +89,7 @@ export class Combat {
     this.speedClass = CRUISE[def.id] || 30;
     this.targets = opts.targets ? opts.targets.map((t) => ({ ...t, pos: { ...t.pos }, alive: true, hp: t.type === 'balloon' ? 1 : 30 })) : this._makeTargets();
     this.enemies = [];
-    this.maxWaves = this.armed && !this.pvp ? 3 : 0;
+    this.maxWaves = this.sandbox ? (this.sandbox === 'battle' ? Infinity : 0) : this.armed && !this.pvp ? 3 : 0;
     if (this.maxWaves) this._spawnWave(null);
   }
 
@@ -165,7 +173,8 @@ export class Combat {
   }
   _spawnWave(player) {
     this.wave++;
-    const n = this.wave + 1 + this.diff.extraEnemies; // 2, 3, 4 機（難しいは +1）
+    // 2, 3, 4 機（難しいは +1）。武装フリーは波が進むほど増える（最大 6 機）
+    const n = Math.min(this.wave + 1, this.sandbox ? 6 : 99) + this.diff.extraEnemies;
     const terr = this.world.terrain;
     const rnd = this.rnd;
     const type = this.speedClass >= 40 ? 'plane' : 'drone';
@@ -305,7 +314,8 @@ export class Combat {
 
     // --- 敵 AI ---
     for (const e of this.enemies) if (e.alive) this._updateEnemy(e, player, dt, env, bodyR);
-    if (this.maxWaves && this.wave < this.maxWaves && this.enemies.length && this.aliveEnemies().length === 0) this._spawnWave(player);
+    if (this.sandbox) this._stepSandbox(vs, player, dt);
+    else if (this.maxWaves && this.wave < this.maxWaves && this.enemies.length && this.aliveEnemies().length === 0) this._spawnWave(player);
 
     // --- 風船への体当たり ---
     for (const t of this.targets) {
@@ -319,7 +329,7 @@ export class Combat {
     const targetsLeft = this.targets.filter((t) => t.alive).length;
     const enemiesLeft = this.aliveEnemies().length;
     const wavesDone = !this.maxWaves || (this.wave >= this.maxWaves && enemiesLeft === 0);
-    if (!this.pvp && targetsLeft === 0 && wavesDone) {
+    if (!this.pvp && !this.sandbox && targetsLeft === 0 && wavesDone) {
       this.finished = true;
       const timeBonus = Math.max(0, Math.round(3000 - this.time * 10));
       this.score += timeBonus;
@@ -330,7 +340,7 @@ export class Combat {
   /** from: 撃ってきた位置（HUD の被弾方向表示用） */
   /** 着地して飛び直せない機体（滑空機・人）は、その時点のスコアで終わる */
   finishEarly(reason) {
-    if (this.finished || this.pvp) return;
+    if (this.finished || this.pvp || this.sandbox) return;
     this.finished = true;
     this.emit({ type: 'combatFinished', time: this.time, score: this.score, timeBonus: 0, shots: this.shots, hits: this.hits, kills: this.kills, health: this.health, partial: true, reason, targetsLeft: this.targets.filter((t) => t.alive).length });
   }
@@ -342,6 +352,8 @@ export class Combat {
 
   damagePlayer(dmg, env, by = 'enemy', from = null) {
     if (this.health <= 0 || this.invulnerable) return;
+    dmg *= this.armor;
+    this.lastHitT = this.time;
     this.health = Math.max(0, this.health - dmg);
     this.emit({ type: 'playerHit', dmg, health: this.health, by, from: from ? { ...from } : null });
     if (this.health <= 0 && env) env.crash(by === 'remote' ? '相手に撃墜されました' : '撃墜されました');
@@ -368,6 +380,88 @@ export class Combat {
     } else this.emit({ type: 'hit', pos, target: 'enemy' });
   }
 
+  /**
+   * 武装フリーの進行: 敵の波を続けて出す、的が無くなったら出し直す、
+   * 地上で止まると弾・ミサイル・体力を補給、しばらく撃たれないと体力が少しずつ戻る
+   */
+  _stepSandbox(vs, player, dt) {
+    if (this.maxWaves && this.aliveEnemies().length === 0) {
+      this.waveWait += dt;
+      // 最初の波はすぐ、以降は 6 秒おいて次の波
+      if (this.wave === 0 || this.waveWait > 6) { this.waveWait = 0; this._spawnWave(player); }
+    }
+    if (this.targets.length && this.targets.every((t) => !t.alive)) this._respawnTargets(vs);
+    const W = this.weapon;
+    if (vs.onGround && vlen(vs.vel) < 3) {
+      const full = !W || (this.ammo >= W.ammo && this.missilesLeft >= (W.missiles || 0) && this.rocketsLeft >= (W.rockets || 0));
+      if (!full || this.health < 100) {
+        if (W) { this.ammo = W.ammo; this.missilesLeft = W.missiles || 0; this.rocketsLeft = W.rockets || 0; }
+        this.health = 100;
+        this.refills++;
+        this.emit({ type: 'rearm' });
+      }
+    } else if (this.time - this.lastHitT > 6 && this.health > 0 && this.health < 100) {
+      this.health = Math.min(100, this.health + 3 * dt);
+    }
+  }
+
+  /** 全部割った的を、いまの位置の前方に出し直す（同じ物を使い回すので描画もそのまま） */
+  _respawnTargets(vs) {
+    const terr = this.world.terrain;
+    const rnd = this.rnd;
+    const slow = this.speedClass < 40;
+    const hs = Math.hypot(vs.vel.x, vs.vel.z);
+    const hd = hs > 2 ? Math.atan2(vs.vel.x, -vs.vel.z) : 0;
+    const fx = Math.sin(hd), fz = -Math.cos(hd);
+    for (const t of this.targets) {
+      if (t.type === 'balloon') {
+        const along = (slow ? 150 : 500) + rnd() * (slow ? 700 : 2000);
+        const side = (rnd() - 0.5) * (slow ? 600 : 1800);
+        const x = clamp(vs.pos.x + fx * along - fz * side, -terr.half * 0.9, terr.half * 0.9);
+        const z = clamp(vs.pos.z + fz * along + fx * side, -terr.half * 0.9, terr.half * 0.9);
+        const g = Math.max(terr.surfaceAt(x, z), terr.roofAt(x, z));
+        t.pos = { x, y: Math.max(g + 30, vs.pos.y + (rnd() - 0.5) * 200), z };
+      }
+      t.hp = t.type === 'balloon' ? 1 : 30;
+      t.alive = true;
+    }
+    this.emit({ type: 'notice', text: '新しい的が出ました' });
+  }
+
+  /** ロケット弾（誘導なし。当たると周りもまとめて壊す）。戻り値: 撃てたか */
+  fireRocket(vs) {
+    if (!this.weapon || !this.weapon.rockets || this.rocketsLeft <= 0) return false;
+    const f = this.gunDirection(vs);
+    const bodyR = Math.max(this.def.p.bodyRadius || 1, 1.2);
+    // 左右交互に出す
+    const side = this.rocketsLeft % 2 ? 1 : -1;
+    const r = vnorm(vcross(f, { x: 0, y: 1, z: 0 }));
+    const pos = vadd(vadd(vs.pos, vscale(f, bodyR + 2)), vscale(r, side * bodyR * 0.8));
+    this.missiles.push({ pos, vel: vadd(vs.vel, vscale(f, 120)), rocket: true, ttl: 6, alive: true });
+    this.rocketsLeft--;
+    this.emit({ type: 'rocket' });
+    return true;
+  }
+
+  /** 爆発: 半径内の的・敵にダメージ */
+  _explode(pos, radius, dmg) {
+    let hit = false;
+    for (const t of this.targets) {
+      if (t.alive && vlen(vsub(t.pos, pos)) < radius + t.r) { this._damageTarget(t, dmg, pos); hit = true; }
+    }
+    for (const e of this.enemies) {
+      if (e.alive && vlen(vsub(e.pos, pos)) < radius + e.r) { this._damageEnemy(e, dmg, pos); hit = true; }
+    }
+    this.emit({ type: 'impact', pos: { ...pos }, owner: 'rocket', big: true });
+    return hit;
+  }
+
+  /** ロック中の目標（敵機は数値の id、地上の的は 't' + id） */
+  _lockTarget(key) {
+    if (typeof key === 'string') { const t = this.targets.find((x) => `t${x.id}` === key); return t ? { pos: t.pos, dir: null, speed: 0, r: t.r, alive: t.alive, ground: t } : null; }
+    return this.enemies[key] || null;
+  }
+
   _updateLock(vs, dt) {
     const W = this.weapon;
     const f = qrot(vs.q, FWD);
@@ -380,8 +474,18 @@ export class Combat {
       const ang = angleBetween(f, to);
       if (ang < bestAng) { bestAng = ang; best = e.id; }
     }
+    // 敵機が円の中にいなければ、地上の的もロックできる
+    if (best < 0 || best === -1) {
+      for (const t of this.targets) {
+        if (!t.alive || t.type !== 'ground') continue;
+        const to = vsub(t.pos, vs.pos);
+        if (vlen(to) > W.lockRange) continue;
+        const ang = angleBetween(f, to);
+        if (ang < bestAng) { bestAng = ang; best = `t${t.id}`; }
+      }
+    }
     const L = this.lock;
-    if (best < 0) { L.target = -1; L.progress = 0; L.locked = false; return; }
+    if (best === -1) { L.target = -1; L.progress = 0; L.locked = false; return; }
     if (best !== L.target) { L.target = best; L.progress = 0; L.locked = false; }
     L.progress = Math.min(1, L.progress + dt / W.lockTime);
     if (!L.locked && L.progress >= 1) { L.locked = true; this.emit({ type: 'lock', enemy: best }); }
@@ -402,21 +506,40 @@ export class Combat {
     for (const m of this.missiles) {
       if (!m.alive) continue;
       m.ttl -= dt;
-      const tgt = this.enemies[m.target];
+      if (m.rocket) {
+        // ロケット弾: 加速しながら真っすぐ（少し落ちる）。的・敵に近づくか地面で爆発
+        const prev = m.pos;
+        const sp = Math.min(520, vlen(m.vel) + 300 * dt);
+        m.vel = vscale(vnorm(m.vel), sp);
+        m.vel.y -= G0 * 0.3 * dt;
+        m.pos = vadd(m.pos, vscale(m.vel, dt));
+        let boom = false;
+        for (const t of this.targets) if (t.alive && segmentHitsSphere(prev, m.pos, t.pos, t.r + 6)) { boom = true; break; }
+        if (!boom) for (const e of this.enemies) if (e.alive && segmentHitsSphere(prev, m.pos, e.pos, e.r + 8)) { boom = true; break; }
+        const g = Math.max(this.world.terrain.surfaceAt(m.pos.x, m.pos.z), this.world.terrain.roofAt(m.pos.x, m.pos.z));
+        if (boom || m.pos.y < g || m.ttl <= 0) {
+          m.alive = false;
+          if (m.pos.y < g) m.pos.y = g + 1;
+          if (this._explode(m.pos, 28, 60)) this.hits++;
+        }
+        continue;
+      }
+      const tgt = this._lockTarget(m.target);
       const sp = Math.min(650, vlen(m.vel) + 250 * dt);
       let dir = vnorm(m.vel);
       if (tgt && tgt.alive) {
         // 比例航法の代わりに未来位置への誘導（旋回率 35°/s 上限）
         const to = vsub(tgt.pos, m.pos);
         const t = vlen(to) / sp;
-        const aim = vadd(tgt.pos, vscale(tgt.dir, tgt.speed * t));
+        const aim = tgt.dir ? vadd(tgt.pos, vscale(tgt.dir, tgt.speed * t)) : tgt.pos;
         dir = rotateToward(dir, vsub(aim, m.pos), 35 * DEG * dt);
         const prev = m.pos;
         m.vel = vscale(dir, sp);
         m.pos = vadd(m.pos, vscale(m.vel, dt));
         if (segmentHitsSphere(prev, m.pos, tgt.pos, tgt.r + 12)) {
           m.alive = false;
-          this._damageEnemy(tgt, 999, m.pos);
+          if (tgt.ground) this._damageTarget(tgt.ground, 999, m.pos);
+          else this._damageEnemy(tgt, 999, m.pos);
           continue;
         }
       } else {
@@ -507,8 +630,13 @@ export class Combat {
     return {
       threats: pos ? this.threats(pos) : [],
       score: this.score,
-      health: this.health,
+      health: Math.round(this.health),
       ammo: this.ammo,
+      rockets: this.rocketsLeft,
+      hasRockets: !!(this.weapon && this.weapon.rockets),
+      hasMissiles: !!(this.weapon && this.weapon.missiles),
+      sandbox: this.sandbox,
+      refills: this.refills,
       armed: this.armed,
       weaponName: this.weapon ? this.weapon.name : null,
       missiles: this.missilesLeft,

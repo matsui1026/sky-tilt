@@ -26,6 +26,7 @@ import { LessonRunner, LESSONS } from './game/lessons.js';
 import { encodeState, extraToVs, STATE_HZ } from './net/protocol.js';
 import { starKind } from './sim/stars.js';
 import { SMOKE_COLORS } from './render/airSmoke.js';
+import { canModify, isStock } from './data/mods.js';
 
 const SETTINGS_KEY = 'skytilt.settings.v1';
 const TUTORIAL_KEY = 'skytilt.tutorialDone.v1';
@@ -61,7 +62,7 @@ export class App {
       ...DEFAULT_INPUT_SETTINGS, control: 'auto', volume: 0.8, vibrate: true, cameraShake: true,
       minimap: true, ghost: true, quality: 'auto', difficulty: 'normal', lefty: false,
       uiSize: 'normal', hudOpacity: 1, camDist: 'normal', stars: true,
-      carAssist: 'mid', carPedal: 'buttons', carSteer: 'tilt', carSens: 1, paints: {},
+      carAssist: 'mid', carPedal: 'buttons', carSteer: 'tilt', carSens: 1, paints: {}, mods: {},
       ...store.get(SETTINGS_KEY, {}),
     };
     this.warp = 1;
@@ -133,6 +134,8 @@ export class App {
       onLesson: (id) => this.startLesson(id),
       lessonsDone: () => this.progress.stats.lessons,
       onPhoto: () => this.startPhoto(),
+      onHangar: (id) => this.openHangar(id),
+      getMods: (id) => this.settings.mods?.[id] ?? null,
       getPaint: (id) => this.settings.paints[id] ?? null,
       setPaint: (id, col) => { this.settings.paints[id] = col; store.set(SETTINGS_KEY, this.settings); },
       onFly: (cfg) => this.onFly(cfg),
@@ -265,7 +268,7 @@ export class App {
     };
     if (this.sim._env) this.sim._env.carAssist = { high: 0.9, mid: 0.55, off: 0 }[s.carAssist] ?? 0.55;
     if (d && this.flying) {
-      this.controls.setVehicle(d, { combat: this.sim.mode === 'combat', warp: this.canWarp(), smoke: this.canSmoke(), car: { pedal: this.input.car.pedal, steer: this.input.car.steer } });
+      this.controls.setVehicle(d, { combat: !!this.sim.combat, warp: this.canWarp(), smoke: this.canSmoke(), car: { pedal: this.input.car.pedal, steer: this.input.car.steer } });
       this.controls.setWarp(this.warp);
       this.controls.setSmoke(this.smokeIdx >= 0 ? SMOKE_COLORS[this.smokeIdx] : null);
       this.controls.setStickVisible(this.input.mode === 'stick' && !(isCar && s.carSteer === 'buttons'));
@@ -311,7 +314,18 @@ export class App {
       this.mpStartFlight(cfg.vehicle, cfg.location, opts);
       return;
     }
-    this.startFlight(cfg.vehicle, cfg.location, { time: cfg.time, weather: cfg.weather, mode: cfg.mode, difficulty: this.settings.difficulty });
+    this.startFlight(cfg.vehicle, cfg.location, { time: cfg.time, weather: cfg.weather, mode: cfg.mode, difficulty: this.settings.difficulty, armed: cfg.mode === 'free' ? cfg.armed : null });
+  }
+
+  /** 改造（ハンガー）。選んだ内容は機体ごとに保存し、次の飛行から反映 */
+  openHangar(id) {
+    const def = VEHICLES[id];
+    if (!def || !canModify(def)) return;
+    this.settings.mods = this.settings.mods || {};
+    this.screens.showHangar(def, { ...(this.settings.mods[id] || {}) }, (m) => {
+      if (isStock(m)) delete this.settings.mods[id]; else this.settings.mods[id] = m;
+      store.set(SETTINGS_KEY, this.settings);
+    }, () => { this.screens.selectVehicle(id); this.screens.show('vehicle'); });
   }
 
   // ---------- 今日のチャレンジ・練習 ----------
@@ -361,7 +375,9 @@ export class App {
       calm: opts.calm, spawn: opts.spawn, rings: opts.rings || null, pvp: opts.pvp, spawnOffset: opts.spawnOffset,
       difficulty: opts.difficulty, targets: opts.targets || null, courseVehicle: opts.courseVehicle, ringRadius: opts.ringRadius,
       carAssist: this.settings.carAssist, rivals: opts.rivals ?? (this.mp ? 0 : 3), countdown: opts.countdown, laps: opts.laps, driftTime: opts.driftTime,
-      stars: starsGot, stunts: opts.lesson ? false : undefined, stuntTime: opts.stuntTime,
+      stars: starsGot, stunts: opts.lesson ? false : undefined, stuntTime: opts.stuntTime, armed: this.mp ? null : opts.armed,
+      // 改造: 2 人プレイ・今日のチャレンジ・練習では使わない（条件をそろえる）
+      mods: opts.mods !== undefined ? opts.mods : (this.mp || opts.daily || opts.lesson ? null : this.settings.mods?.[vehicleId]),
     });
     const def = sim.def;
     this.def = def;
@@ -375,7 +391,7 @@ export class App {
     this.replay = null;
     this.closePhoto();
     this.input.car = { active: def.category === 'car', pedal: def.model === 'car' ? this.settings.carPedal : 'buttons', steer: def.model === 'car' ? this.settings.carSteer : 'tilt', sensitivity: def.model === 'car' ? this.settings.carSens : 1 };
-    this.controls.setVehicle(def, { combat: sim.mode === 'combat', warp: this.canWarp(), smoke: this.canSmoke(), car: { pedal: this.input.car.pedal, steer: this.input.car.steer } });
+    this.controls.setVehicle(def, { combat: !!sim.combat, warp: this.canWarp(), smoke: this.canSmoke(), car: { pedal: this.input.car.pedal, steer: this.input.car.steer } });
     this.controls.setSmoke(null);
     this.controls.show(true);
     this.updateHudBounds(); // 操作 UI が変わったら HUD の配置範囲もすぐ更新
@@ -402,6 +418,7 @@ export class App {
     this.applyControlMode(false);
     this.progress.addUnique('vehicles', def.id);
     this.progress.addUnique('locations', locationId);
+    if (def.mods) this.progress.add('modFlights');
     this._wasGround = sim.vs.onGround;
     // ゴースト（リングコース・レースの自己ベスト）。記録はリプレイにも使う
     this.ghostRec = new GhostRecorder();
@@ -435,7 +452,8 @@ export class App {
         this.input.calibrate(300);
       }, { combat: combatTut, combatOnly: tutSeen && combatTut });
     } else {
-      this.toast(sim.mode === 'stunt' ? '曲技: ロール・宙返り・超低空・すり抜けをつないで高得点（90 秒）' : `${def.short} ／ ${loc.name} ／ ${MODES[sim.mode].name}`, sim.mode === 'stunt' ? 3500 : 2200);
+      if (sim.combat && sim.mode === 'free') this.toast(sim.combat.sandbox === 'battle' ? '武装フリー: 敵機が次々に来ます。着陸して止まると補給' : '武装フリー: 的を撃ち放題。着陸して止まると補給', 3500);
+      else this.toast(sim.mode === 'stunt' ? '曲技: ロール・宙返り・超低空・すり抜けをつないで高得点（90 秒）' : `${def.short} ／ ${loc.name} ／ ${MODES[sim.mode].name}`, sim.mode === 'stunt' ? 3500 : 2200);
     }
   }
 
@@ -454,7 +472,7 @@ export class App {
   /** 早送りできるのは、ゆっくり移動する機体の 1 人プレイ（射撃・リングはタイムを競うので不可） */
   canWarp() {
     const d = this.def;
-    if (!d || this.mp || this.sim.mode === 'rings' || this.sim.mode === 'combat' || this.sim.mode === 'stunt') return false;
+    if (!d || this.mp || this.sim.combat || this.sim.mode === 'rings' || this.sim.mode === 'stunt') return false;
     return d.model === 'balloon' || d.model === 'paraglider' || d.id === 'sailplane';
   }
 
@@ -721,7 +739,12 @@ export class App {
         case 'noLock':
           this.toast('ロックオンしていません（敵を正面の円に入れ続ける）');
           break;
+        case 'rearm':
+          this.toast('補給完了（弾・ミサイル・ロケット・体力）', 1800);
+          haptic(30);
+          break;
         case 'wave':
+          if (this.sim.combat && this.sim.combat.sandbox) this.progress.max('bestWave', ev.wave);
           if (ev.wave > 1) this.toast(`第${ev.wave}波 — 敵 ${ev.count} 機`);
           break;
         case 'result':
@@ -1206,7 +1229,7 @@ export class App {
     const items = [];
     const field = this.sim.world.terrain.field;
     items.push({ x: field.x, z: field.z, color: '#ffb040', shape: 'square', r: 3 });
-    let range = ['heli', 'jetsuit', 'paraglider', 'balloon'].includes(this.def.model) || this.def.id === 'drone' ? 1500 : 4000;
+    let range = ['heli', 'jetsuit', 'paraglider', 'balloon'].includes(this.def.model) || this.def.base === 'drone' || this.def.id === 'drone' ? 1500 : 4000;
     if (st.rings && st.rings.next) {
       const idx = st.rings.index;
       this.sim.rings.slice(idx, idx + 4).forEach((r, i) => items.push({ x: r.pos.x, z: r.pos.z, color: i === 0 ? '#3affb0' : '#ffc23a', r: i === 0 ? 4 : 2.5 }));
@@ -1220,7 +1243,8 @@ export class App {
         if (!t.alive) continue;
         const d = Math.hypot(t.pos.x - vs.pos.x, t.pos.y - vs.pos.y, t.pos.z - vs.pos.z);
         items.push({ x: t.pos.x, z: t.pos.z, color: t.type === 'balloon' ? '#ffb8f0' : '#ffb040', r: 2, shape: t.type === 'ground' ? 'square' : 'dot' });
-        const entry = { pos: t.pos, kind: t.type, dist: d };
+        const lt = c.lock.target === `t${t.id}` ? c.lock.progress : null;
+        const entry = { pos: t.pos, kind: t.type, dist: d, lock: lt, locked: lt != null && c.lock.locked };
         if (d < 2500) targets.push(entry);
         if (d < nd) { nd = d; nearest = entry; }
       }
@@ -1249,7 +1273,7 @@ export class App {
       const nowMs = performance.now();
       this.hitDirs = this.hitDirs.filter((x) => nowMs - x.t < 1500);
       extra.hitDirs = this.hitDirs.map((x) => ({ from: x.from, age: (nowMs - x.t) / 1500 }));
-      range = this.def.id === 'drone' || this.def.model === 'jetsuit' || this.def.model === 'heli' ? 800 : 2500;
+      range = this.def.id === 'drone' || this.def.base === 'drone' || this.def.model === 'jetsuit' || this.def.model === 'heli' ? 800 : 2500;
     }
     if (this.mp && this.remoteSample) {
       const r = this.remoteSample;

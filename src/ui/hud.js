@@ -477,7 +477,7 @@ export class Hud {
     this.attitudeBall(cx, H - 70, 34, st.attitude.pitch, st.attitude.roll);
     const isJet = this.def.id === 'jetsuit';
     if (st.fuel != null) this.fuelGauge(st.fuel, isJet ? '燃料' : '電池');
-    const lab = isJet || this.def.id === 'drone' ? '推力' : 'コレクティブ';
+    const lab = isJet || (this.def.base || this.def.id) === 'drone' ? '推力' : 'コレクティブ';
     this.statusLine([
       `${lab} ${Math.round(st.throttle * 100)}%`,
       st.kGE && st.kGE > 1.03 ? '地面効果' : null,
@@ -607,7 +607,9 @@ export class Hud {
     const c = this.ctx;
     const cb = st.combat;
     const items = [`スコア ${cb.score}`, `❤ ${cb.health}`, `的 ${cb.targetsTotal - cb.targetsLeft}/${cb.targetsTotal}`];
-    if (cb.maxWaves) items.push(`敵 ${cb.enemiesLeft}（第${cb.wave}/${cb.maxWaves}波）`);
+    if (cb.maxWaves === Infinity) items.push(`敵 ${cb.enemiesLeft}（第${cb.wave}波）`);
+    else if (cb.maxWaves) items.push(`敵 ${cb.enemiesLeft}（第${cb.wave}/${cb.maxWaves}波）`);
+    if (cb.sandbox && cb.armed && (cb.ammo === 0 || (cb.hasMissiles && cb.missiles === 0 && cb.hasRockets && cb.rockets === 0))) items.push('着陸して補給');
     if (!cb.armed) items.push('風船に体当たり！');
     this.statusLine(items, 74);
     // 体力バー

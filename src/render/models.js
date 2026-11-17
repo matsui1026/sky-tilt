@@ -537,7 +537,30 @@ function buildBalloon() {
 /** opts: { paint（車の塗り色）, night（ヘッドライト） } */
 export function buildVehicleModel(def, opts = {}) {
   if (def.model === 'car') return buildCarModel(def, opts);
-  switch (def.id) {
+  const m = buildBaseModel(def, opts);
+  // 改造機: 元の機体の形を、大きさと色味を変えて使う
+  if (def.modelScale && def.modelScale !== 1) {
+    m.root.scale.multiplyScalar(def.modelScale);
+    if (m.root.userData.size) m.root.userData.size *= def.modelScale;
+  }
+  if (def.tint != null) {
+    const tint = new THREE.Color(def.tint);
+    const done = new Map();
+    m.root.traverse((o) => {
+      if (!o.isMesh || !o.material || Array.isArray(o.material)) return;
+      if (!done.has(o.material)) {
+        const mat = o.material.clone();
+        if (mat.color && !mat.transparent) mat.color.lerp(tint, 0.55);
+        done.set(o.material, mat);
+      }
+      o.material = done.get(o.material);
+    });
+  }
+  return m;
+}
+
+function buildBaseModel(def, opts) {
+  switch (def.base || def.id) {
     case 'prop': return buildProp();
     case 'airliner': return buildAirliner();
     case 'fighter': return buildFighter();

@@ -734,7 +734,148 @@ export const VEHICLES = {
   },
 };
 
-export const VEHICLE_ORDER = ['prop', 'airliner', 'fighter', 'sailplane', 'heli', 'drone', 'balloon', 'paraglider', 'jetsuit', 'wingsuit', 'skydive', 'driftcar', 'rally', 'hypercar', 'monster', 'kart', 'hover', 'flycar'];
+// ---------------- 改造機（既存の機体をもとに作った派生機） ----------------
+// base: 見た目（モデル・アイコン）を借りる元の機体。tint: 機体の色味、modelScale: 大きさ
+// over の値は深くマージする（null を入れるとその項目を消す）
+function merge(a, b) {
+  if (b === undefined) return a;
+  if (b === null || typeof b !== 'object' || Array.isArray(b) || typeof a !== 'object' || a === null || Array.isArray(a)) return b;
+  const out = { ...a };
+  for (const k of Object.keys(b)) out[k] = merge(a[k], b[k]);
+  return out;
+}
+function derive(baseId, over) {
+  return merge(structuredClone(VEHICLES[baseId]), { base: baseId, ...over });
+}
+
+VEHICLES.racer = derive('prop', {
+  id: 'racer', name: 'エアレーサー R-7', short: 'レーサー',
+  desc: '軽量・大パワーの曲技レーサー。傾けている間ずっと回る本格派。',
+  stats: { speed: 4, agility: 5, difficulty: 4 },
+  tint: 0xff5a3a, modelScale: 0.85,
+  weapon: { name: '機銃', rate: 16, speed: 800, damage: 10, ammo: 700, spread: 0.004, rockets: 6 },
+  guide: {
+    tilt: '左右に傾けている間ずっとロールし続ける（戻しても水平には戻らない）。手前で強く引き起こし、奥で機首下げ。背面のまま飛ぶこともできる。',
+    throttle: 'エンジン出力。とても強力なので、離陸はゆっくり上げる。',
+    tips: ['ロール → 宙返り → 背面飛行をつなぐと曲技の倍率が一気に上がる。', '失速速度は約 100 km/h。低速で強く引かない。'],
+  },
+  camera: { chaseDist: 12, chaseHeight: 3 },
+  spawnAir: { agl: 500, speed: 75, throttle: 0.7 },
+  approach: { speed: 40 },
+  ringRadius: 20,
+  p: {
+    mass: 750, S: 11, CL0: 0.15, alphaStall: deg(16), CD0: 0.022, k: 0.06,
+    thrust: { type: 'prop', static: 7000, power: 260000 },
+    roll: { maxRate: deg(300), tau: 0.08, bankCmd: null, bankGain: null, autoLevel: 0 },
+    pitch: { maxRate: deg(60), tauAlpha: 0.18, tauRate: 0.07, alphaMaxCmd: deg(17), alphaMinCmd: deg(-14), turnComp: 0.3 },
+    qRef: 0.5 * 1.225 * 55 * 55,
+    gLimit: { pos: 10, neg: -7 },
+    stallRollKick: deg(35),
+    ground: { rotateSpeed: 30, maxSink: 3.5 },
+  },
+});
+
+VEHICLES.warbird = derive('prop', {
+  id: 'warbird', name: 'レシプロ戦闘機 WB-4', short: 'レシプロ戦',
+  desc: '大馬力の単発戦闘機。機銃 4 門とロケット弾で地上も空も攻める。',
+  stats: { speed: 4, agility: 4, difficulty: 3 },
+  tint: 0x6f7f4a, modelScale: 1.2,
+  buttons: [
+    { id: 'gear', label: 'ギア', type: 'toggle', desc: '車輪の出し入れ（空中のみ）。上げると速くなる。着陸前に必ず出す' },
+    { id: 'flaps', label: 'フラップ', type: 'cycle', desc: '押すたびに UP → 1 → 2。離着陸で下げる' },
+    ...RUDDER,
+  ],
+  weapon: { name: '機銃×4', rate: 36, speed: 880, damage: 9, ammo: 1400, spread: 0.007, rockets: 10 },
+  guide: {
+    tilt: '左右でロール（傾けている間回り続ける）。手前で旋回（最大 8G）、奥で機首下げ。',
+    throttle: 'エンジン出力。最高約 590 km/h。',
+    tips: ['ロケット弾は真っすぐ飛ぶ。地上の的に機首を向けて撃つ。', '離陸は約 160 km/h。ギアを上げ忘れると遅い。'],
+  },
+  camera: { chaseDist: 17, chaseHeight: 4 },
+  spawnAir: { agl: 700, speed: 120, throttle: 0.75, gear: false },
+  approach: { dist: 3000, speed: 55, throttle: 0.35, flaps: 1, gear: true },
+  ringRadius: 35, ringSpacingTime: 7,
+  p: {
+    mass: 4200, S: 21, CL0: 0.2, alphaStall: deg(16), CD0: 0.021, k: 0.05,
+    gear: { retractable: true, dCD: 0.015 },
+    thrust: { type: 'prop', static: 16000, power: 1200000 },
+    roll: { maxRate: deg(140), tau: 0.12, bankCmd: null, bankGain: null, autoLevel: 0 },
+    pitch: { maxRate: deg(35), tauAlpha: 0.25, tauRate: 0.1, alphaMaxCmd: deg(18), alphaMinCmd: deg(-9), turnComp: 0.5 },
+    qRef: 0.5 * 1.225 * 80 * 80,
+    gLimit: { pos: 8, neg: -4 },
+    stallRollKick: deg(35),
+    ground: { gearHeight: 1.5, rotateSpeed: 46, maxSink: 3.8 },
+    bodyRadius: 1.3,
+  },
+});
+
+VEHICLES.rocketplane = derive('fighter', {
+  id: 'rocketplane', name: 'ロケット実験機 XR-1', short: 'ロケット機',
+  desc: '桁違いの推力。A/B を入れればマッハ 2 超え。止まれない速さを操れ。',
+  stats: { speed: 5, agility: 4, difficulty: 5 },
+  tint: 0xf0f0f6, modelScale: 1.1,
+  weapon: { missiles: 6 },
+  guide: {
+    tilt: '左右で素早くロール。手前で引き起こし（最大 7.5G）、奥で機首下げ。',
+    throttle: 'ロケットの推力。A/B と合わせると垂直上昇もできる。',
+    tips: ['速すぎると曲がれない。旋回の前は推力を絞る。', '高度 10 km 以上で空気が薄くなり、さらに速くなる。'],
+  },
+  spawnAir: { agl: 3000, speed: 300, throttle: 0.7, gear: false },
+  ringRadius: 60, ringSpacingTime: 6,
+  p: {
+    mass: 9000, CD0: 0.018, waveDrag: 0.02,
+    thrust: { type: 'jet', mil: 110000, ab: 240000 },
+    roll: { maxRate: deg(200) },
+    gLimit: { pos: 7.5, neg: -3 },
+  },
+});
+
+VEHICLES.gunship = derive('heli', {
+  id: 'gunship', name: '攻撃ヘリ AH-9', short: '攻撃ヘリ',
+  desc: '重武装・重装甲。機関砲・ロケット弾・誘導ミサイルを積む空飛ぶ砦。',
+  stats: { speed: 3, agility: 3, difficulty: 3 },
+  tint: 0x4a5a3a, modelScale: 1.3,
+  armor: 0.6,
+  weapon: { name: '機関砲', rate: 18, speed: 900, damage: 14, ammo: 900, spread: 0.004, rockets: 16, missiles: 4, lockRange: 2500, lockCone: deg(18), lockTime: 1.2 },
+  guide: {
+    tilt: '傾けた方向に機体が傾いて進む。普通のヘリより大きく傾けられ、速い。',
+    throttle: 'コレクティブ。約 57% でホバリング。',
+    tips: ['装甲が厚く、受けるダメージは 60%。', '地上の的にもミサイルをロックできる（正面の円に入れ続ける）。'],
+  },
+  camera: { chaseDist: 24, chaseHeight: 7 },
+  ringRadius: 20,
+  p: {
+    mass: 5200, thrustMax: 5200 * 9.80665 * 1.75, rotorRadius: 7, hubHeight: 3.2, cgHeight: 1.4,
+    dragArea: 4.5, att: { maxPitch: deg(35), maxRoll: deg(45), tau: 0.28 },
+    yaw: { maxRate: deg(90) },
+    bodyRadius: 2.2,
+  },
+});
+
+VEHICLES.racedrone = derive('drone', {
+  id: 'racedrone', name: 'レースドローン X5', short: 'レースドローン',
+  desc: '推力重量比 5.5 の競技機。最大 70° まで傾き、一瞬で 100 km/h。',
+  stats: { speed: 4, agility: 5, difficulty: 5 },
+  tint: 0xff3a8a, modelScale: 1.2,
+  weapon: { rate: 14 },
+  guide: {
+    tilt: '傾けた方向へ大きく傾いて突進する（最大 70°）。ほんの少し傾けるだけで十分。',
+    throttle: '推力。約 18% でホバリング。ちょっと上げるだけで急上昇する。',
+    tips: ['バッテリーは約 5 分（フル推力時）。', '視点をコックピットにすると FPV レース。'],
+  },
+  ringRadius: 6, ringSpacingTime: 6,
+  p: {
+    thrustMax: 1.2 * 9.80665 * 5.5, dragArea: 0.02,
+    att: { maxPitch: deg(70), maxRoll: deg(70), tau: 0.07 },
+    yaw: { maxRate: deg(360), tau: 0.06 },
+    battery: { burnTime: 300 },
+  },
+});
+
+/** 見た目（モデル・アイコン）に使う機体の id */
+export const visualId = (def) => def.base || def.id;
+
+export const VEHICLE_ORDER = ['prop', 'racer', 'warbird', 'airliner', 'fighter', 'rocketplane', 'sailplane', 'heli', 'gunship', 'drone', 'racedrone', 'balloon', 'paraglider', 'jetsuit', 'wingsuit', 'skydive', 'driftcar', 'rally', 'hypercar', 'monster', 'kart', 'hover', 'flycar'];
 
 /** 機体選択のタブ（category の値で分類） */
 export const VEHICLE_TABS = [

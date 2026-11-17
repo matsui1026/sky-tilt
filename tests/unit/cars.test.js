@@ -642,7 +642,8 @@ describe('今日のチャレンジ', () => {
       expect(Number.isFinite(sim.vs.pos.y), key).toBe(true);
     }
     expect(set.size).toBeGreaterThan(15);
-  });
+    // 28 日分の地形を作るので、並列実行中は既定の 5 秒を超えることがある
+  }, 30_000);
   it('点数は良い結果ほど大きい', () => {
     expect(dailyScore({ type: 'race', time: 60, place: 1 })).toBeGreaterThan(dailyScore({ type: 'race', time: 90, place: 1 }));
     expect(dailyScore({ type: 'rings', total: 60 })).toBeGreaterThan(dailyScore({ type: 'rings', total: 90 }));

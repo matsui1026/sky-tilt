@@ -27,6 +27,9 @@ export const ACHIEVEMENTS = [
   { id: 'stunt_s', name: 'エアショーの主役', desc: '曲技モードで S 評価', test: (s) => s.stuntS >= 1 },
   { id: 'stars_10', name: 'スターハンター', desc: 'スターを合計 10 個集める', test: (s) => s.stars >= 10 },
   { id: 'stars_set', name: 'コンプリート', desc: '1 つのロケーションのスターをすべて集める', test: (s) => s.starSets >= 1 },
+  { id: 'modder', name: 'ガレージの主', desc: '改造した機体で 5 回飛ぶ', test: (s) => s.modFlights >= 5 },
+  { id: 'wave_5', name: '防空戦', desc: '武装フリー（的＋敵機）で第 5 波まで生き残る', test: (s) => s.bestWave >= 5 },
+  { id: 'wave_10', name: '不沈のエース', desc: '武装フリー（的＋敵機）で第 10 波まで生き残る', test: (s) => s.bestWave >= 10 },
   { id: 'daily_3', name: '毎日パイロット', desc: '今日のチャレンジを 3 日クリア', test: (s) => (s.dailyDays || []).length >= 3 },
   { id: 'student', name: '卒業', desc: '練習モードをすべて終える', test: (s, ctx) => (s.lessons || []).length >= ctx.lessonCount },
 ];
@@ -34,7 +37,7 @@ export const ACHIEVEMENTS = [
 const EMPTY = {
   takeoffs: 0, landings: 0, landingS: 0, rings: 0, kills: 0, balloons: 0, distanceKm: 0, nightMinutes: 0, badWeatherMinutes: 0,
   flightMinutes: 0, driveMinutes: 0, driftBest: 0, driftTotal: 0, raceWins: 0, raceWinsHard: 0, races: 0, cones: 0, bestAir: 0, parkS: 0, waterKm: 0,
-  loops: 0, rolls: 0, lowSeconds: 0, stuntBest: 0, stuntS: 0, stars: 0, starSets: 0,
+  modFlights: 0, bestWave: 0, loops: 0, rolls: 0, lowSeconds: 0, stuntBest: 0, stuntS: 0, stars: 0, starSets: 0,
   crashes: 0, vehicles: [], locations: [], dailyDays: [], lessons: [],
 };
 

@@ -3,6 +3,7 @@ import { DEG, RAD, clamp, attitudeOf, vlen, wrapPi } from './math.js';
 import { World, airDensity } from './world.js';
 import { Terrain } from './terrain.js';
 import { getVehicle } from '../data/vehicles.js';
+import { applyMods } from '../data/mods.js';
 import { getLocation } from '../data/locations.js';
 import { createFixedWing, stepFixedWing } from './vehicles/fixedwing.js';
 import { createHeli, stepHeli, hoverCollective } from './vehicles/heli.js';
@@ -68,7 +69,8 @@ export class Simulation {
    *         spawn: {pos, heading(deg), speed, onGround, throttle, phase} }
    */
   load(vehicleId, locationId, opts = {}) {
-    const def = getVehicle(vehicleId);
+    // 改造（ハンガーで選んだ 武装・エンジン・機体）を反映した定義
+    const def = applyMods(getVehicle(vehicleId), opts.mods);
     const loc = getLocation(locationId);
     const seed = (opts.seed ?? 1234) >>> 0;
     this.def = def;
@@ -117,8 +119,10 @@ export class Simulation {
       if (opts.ringRadius) for (const r of this.rings) r.radius = Math.max(r.radius, opts.ringRadius);
       this.tracker = new RingTracker(this.rings);
     }
-    this.combat = this.mode === 'combat'
-      ? new Combat(this.world, def, { pvp: !!opts.pvp, spawn: { pos: { ...spawn.pos }, heading: spawn.heading }, difficulty: opts.difficulty, targets: opts.targets })
+    // 武装フリー: フリーでも的や敵機を出して撃てる（opts.armed: 'targets' | 'battle'）
+    const sandbox = this.mode === 'free' && (opts.armed === 'targets' || opts.armed === 'battle') && def.model !== 'car' ? opts.armed : null;
+    this.combat = this.mode === 'combat' || sandbox
+      ? new Combat(this.world, def, { pvp: !!opts.pvp, spawn: { pos: { ...spawn.pos }, heading: spawn.heading }, difficulty: opts.difficulty, targets: opts.targets, sandbox })
       : null;
     this._stillT = 0;
     // 車のモード
@@ -154,7 +158,7 @@ export class Simulation {
   emit(type, data = {}) {
     this.events.push({ ...data, type, t: this.t });
     // 空飛ぶ車は自由飛行で着地しても走り続けられるので評価を出さない（着陸モードのみ）
-    const rateIt = this.mode !== 'combat' && this.mode !== 'stunt' && !(this.def.model === 'flycar' && this.mode !== 'landing');
+    const rateIt = this.mode !== 'combat' && this.mode !== 'stunt' && !this.combat && !(this.def.model === 'flycar' && this.mode !== 'landing');
     if (type === 'landed' && this.status === 'flying' && rateIt) {
       const r = rateLanding(this.def, data, this.world.terrain.field);
       this.result = { type: 'landing', mode: this.mode, ...r };
@@ -243,7 +247,12 @@ export class Simulation {
         this.emit('notice', { text: c.autopilot ? 'オートパイロット: 高度と方位を保ちます（操作すると解除）' : 'オートパイロット解除' });
         return c.autopilot;
       case 'missile':
+        // ミサイルとロケットの両方を積んでいるとき: ロックしていればミサイル、していなければロケット
+        if (this.combat && this.status === 'flying' && !this.combat.lock.locked && this.combat.rocketsLeft > 0 && this.combat.weapon.missiles) return this.combat.fireRocket(this.vs);
         if (this.combat && this.status === 'flying') return this.combat.fireMissile(this.vs);
+        return false;
+      case 'rocket':
+        if (this.combat && this.status === 'flying') return this.combat.fireRocket(this.vs);
         return false;
       default:
         return null;

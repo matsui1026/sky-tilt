@@ -8,6 +8,9 @@ import { modesFor } from '../sim/modes.js';
 import { fmtTime } from './hud.js';
 import { ACHIEVEMENTS } from '../game/progress.js';
 import { LESSONS } from '../game/lessons.js';
+import { MOD_SLOTS, DEFAULT_MODS, applyMods, modChoices, modStats, canModify, isStock } from '../data/mods.js';
+
+const ARMED = { off: { name: 'なし' }, targets: { name: '的' }, battle: { name: '的＋敵機' } };
 
 /** 車の塗り色の候補 */
 const PAINTS = [0xe8e8ec, 0xd62828, 0x2f6fe0, 0xf0b020, 0x18a058, 0x22262c];
@@ -56,7 +59,7 @@ export function tutorialText(def) {
 const PC_KEYS = [
   ['W / ↑', '機首下げ（奥へ倒す）'], ['S / ↓', '機首上げ（手前に引く）'], ['A D / ← →', 'ロール（左右）'], ['Q / E', 'ヨー・ラダー'],
   ['Shift / Ctrl', 'スロットル 上げ / 下げ'], ['F', 'フラップ'], ['G', 'ギア'], ['X', 'スポイラー・エアブレーキ'], ['B', 'アフターバーナー'],
-  ['Space', 'パラシュート'], ['T', '飛行 ⇄ 走行'], ['K / Enter', '射撃（押している間）'], ['M', 'ミサイル'], ['H / J', 'バーナー / 排気弁'],
+  ['Space', 'パラシュート'], ['T', '飛行 ⇄ 走行'], ['K / Enter', '射撃（押している間）'], ['M', 'ミサイル'], ['U', 'ロケット弾'], ['H / J', 'バーナー / 排気弁'],
   ['C', '視点切替'], ['R', '再キャリブレーション'], ['Y', '早送り（熱気球・滑空機）'], ['L', 'オートパイロット'], ['O', 'スモーク（押すたびに色が変わる）'], ['Esc / P', '一時停止'],
   ['車: W / S', 'アクセル / ブレーキ（押し続けるとバック）'], ['車: A D', 'ハンドル'], ['車: Space', 'サイドブレーキ'], ['車: N', 'ニトロ'], ['車: V', '復帰'],
 ];
@@ -67,7 +70,7 @@ export class Screens {
     this.root = root;
     this.cb = cb;
     this.el = {};
-    this.state = { vehicle: 'prop', location: 'island', time: 'noon', weather: 'clear', mode: 'free' };
+    this.state = { vehicle: 'prop', location: 'island', time: 'noon', weather: 'clear', mode: 'free', armed: 'off' };
     this.current = null;
     this.mp = null; // 2 人プレイ中なら { role: 'host' | 'guest' }
     this.build();
@@ -97,7 +100,7 @@ export class Screens {
     for (const id of VEHICLE_ORDER) {
       const v = VEHICLES[id];
       const card = h('button', { class: 'card', type: 'button', 'data-vehicle': id },
-        h('div', { html: ICONS[id] || ICONS.prop }),
+        h('div', { html: ICONS[v.base || id] || ICONS.prop }),
         h('div', { class: 'name' }, v.short, v.weapon ? h('span', { class: 'badge' }, '武装') : null),
         h('div', { class: 'desc' }, v.desc),
         bars('速度', v.stats.speed), bars('機動性', v.stats.agility), bars('難易度', v.stats.difficulty, 'diff'));
@@ -124,6 +127,7 @@ export class Screens {
         tapButton('← 戻る', () => this.cb.onVehicleBack(), 'btn small'),
         this.vehicleTitle,
         tapButton('📖 ガイド', () => this.showGuide(this.state.vehicle, 'vehicle'), 'btn small', { id: 'btn-vehicle-guide' }),
+        this.hangarBtn = tapButton('🔧 改造', () => this.cb.onHangar && this.cb.onHangar(this.state.vehicle), 'btn small', { id: 'btn-vehicle-hangar' }),
         tapButton('次へ →', () => this.cb.onVehicleNext(), 'btn primary', { id: 'btn-vehicle-next' })),
       h('div', { class: 'screen-body col', style: { justifyContent: 'center' } },
         h('div', { class: 'row', style: { justifyContent: 'space-between', flexWrap: 'nowrap' } }, this.tabRow, this.paintRow),
@@ -150,11 +154,14 @@ export class Screens {
       lcards.append(card);
     }
     const s = this.state;
-    this.modeCtl = segmented(MODES, MODE_ORDER, s.mode, (id) => { s.mode = id; this.updateNote(); }, 'name', 'mode-');
+    this.modeCtl = segmented(MODES, MODE_ORDER, s.mode, (id) => { s.mode = id; this.updateArmed(); this.updateNote(); }, 'name', 'mode-');
+    this.armedCtl = segmented(ARMED, Object.keys(ARMED), s.armed, (id) => { s.armed = id; this.updateNote(); }, 'name', 'armed-');
+    this.armedLabel = h('div', { class: 'k' }, '武装');
     const opts = h('div', { class: 'opts' },
       h('div', { class: 'k' }, '時間帯'), segmented(TIMES, TIME_ORDER, s.time, (id) => { s.time = id; this.updateNote(); }, 'name', 'time-'),
       h('div', { class: 'k' }, '天候'), segmented(WEATHERS, WEATHER_ORDER, s.weather, (id) => { s.weather = id; this.updateNote(); }, 'name', 'weather-'),
       h('div', { class: 'k' }, 'モード'), this.modeCtl,
+      this.armedLabel, this.armedCtl,
     );
     this.noteEl = h('div', { class: 'loc-note', id: 'loc-note', style: { display: 'none' } });
     this.flyBtn = tapButton('飛行開始 ▶', () => this.cb.onFly({ ...this.state }), 'btn primary', { id: 'btn-fly' });
@@ -189,6 +196,7 @@ export class Screens {
     this.el.wait = h('div', { class: 'screen bg-sky col center', id: 'scr-wait' });
     this.el.crash = h('div', { class: 'screen dim col center', id: 'scr-crash' });
     this.el.result = h('div', { class: 'screen dim col center', id: 'scr-result' });
+    this.el.hangar = h('div', { class: 'screen bg-guide col', id: 'scr-hangar' });
     this.el.records = h('div', { class: 'screen bg-guide col', id: 'scr-records' });
     this.el.lessons = h('div', { class: 'screen bg-guide col', id: 'scr-lessons' });
     this.el.daily = h('div', { class: 'screen bg-sky col center', id: 'scr-daily' });
@@ -208,6 +216,7 @@ export class Screens {
   /** 2 人プレイの状態を反映（null で解除） */
   setMultiplayer(mp) {
     this.mp = mp;
+    this.updateArmed();
     this.vehicleTitle.textContent = mp ? `機体を選ぶ（2人プレイ・${mp.role === 'host' ? 'ホスト' : 'ゲスト'}）` : '機体を選ぶ';
   }
 
@@ -228,7 +237,22 @@ export class Screens {
       this.modeCtl.setVisible(ok);
       if (!ok.includes(this.state.mode)) { this.state.mode = 'free'; this.modeCtl.select('free'); }
     }
+    this.updateArmed();
+    if (this.hangarBtn) {
+      const v = VEHICLES[id];
+      this.hangarBtn.style.display = canModify(v) ? '' : 'none';
+      const mods = this.cb.getMods ? this.cb.getMods(id) : null;
+      this.hangarBtn.textContent = isStock(mods) ? '🔧 改造' : '🔧 改造中';
+      this.hangarBtn.classList.toggle('on', !isStock(mods));
+    }
     this.updateNote();
+  }
+
+  /** 武装フリーの選択はフリーのとき・車以外だけ出す（2 人プレイでは出さない） */
+  updateArmed() {
+    if (!this.armedCtl) return;
+    const on = this.state.mode === 'free' && VEHICLES[this.state.vehicle].category !== 'car' && !this.mp;
+    this.armedCtl.style.display = this.armedLabel.style.display = on ? '' : 'none';
   }
 
   selectTab(tab) {
@@ -267,6 +291,7 @@ export class Screens {
     else if (s.weather === 'fog') msg = '霧で遠くが見えません。レーダーと HUD の矢印を頼りに';
     else if (s.weather === 'windy' && s.vehicle === 'paraglider') msg = '⚠ 強風（13 m/s）はパラグライダーの速度（約 10 m/s）より速く、前に進めず押し戻されます';
     else if (s.mode === 'stunt') msg = v.model === 'fixedwing' && v.p.roll.bankCmd ? '90 秒の曲技。宙返り（速度をつけて手前に引き続ける）・超低空・谷やビルのすり抜けをつなぐと倍率アップ' : v.id === 'airliner' ? '90 秒の曲技。旅客機は保護機能で宙返り・ロールができません。超低空とすり抜けで稼ごう' : '90 秒の曲技。ロール・宙返り・背面・ナイフエッジ・超低空・すり抜けをつなぐと倍率アップ（最大 ×5）';
+    else if (s.mode === 'free' && s.armed !== 'off' && !carLike && !this.mp) msg = `武装フリー: ${s.armed === 'battle' ? '敵機が波になって次々に来る（どこまで生き残れるか）。' : '的を撃ち放題。'}着陸して止まると弾と体力を補給。${v.weapon ? '' : 'この機体は武器が無いので 🔧 改造で付けるか、体当たりで。'}`;
     else if (s.mode === 'combat' && !v.weapon) msg = 'この機体は武器がありません。風船に体当たりして割りましょう';
     else if (s.mode === 'combat') msg = `武器: ${v.weapon.name}${v.weapon.missiles ? '・追尾ミサイル' : ''}。風船・地上の的・敵機を撃ち落とす`;
     else if (s.vehicle === 'balloon') msg = '熱気球はリングコース・射撃では遊べません。高さごとの風を使って目標へ';
@@ -465,7 +490,7 @@ export class Screens {
       const g = v.guide || {};
       content.innerHTML = '';
       content.append(
-        h('div', { class: 'guide-head' }, h('div', { class: 'guide-icon', html: ICONS[id] || '' }), h('div', {}, h('h3', {}, v.name), h('p', { class: 'muted' }, v.desc))),
+        h('div', { class: 'guide-head' }, h('div', { class: 'guide-icon', html: ICONS[v.base || id] || '' }), h('div', {}, h('h3', {}, v.name), h('p', { class: 'muted' }, v.desc))),
         h('h4', {}, '傾き'), h('p', {}, g.tilt || ''),
         h('h4', {}, v.model === 'car' ? 'アクセル・ブレーキ（右手）' : 'スロットル（右手）'), h('p', {}, g.throttle || '—'),
         h('h4', {}, '機体ボタン（左手）'),
@@ -496,6 +521,57 @@ export class Screens {
     );
     select(vehicleId);
     this.show('guide');
+  }
+
+  // ---------- 改造（ハンガー） ----------
+  /** def: 元の機体、mods: いまの改造、onChange(mods): 変えるたびに保存、onClose: 戻る */
+  showHangar(def, mods, onChange, onClose) {
+    const el = this.el.hangar;
+    el.innerHTML = '';
+    const choices = modChoices(def);
+    const m = { ...DEFAULT_MODS, ...mods };
+    const base = modStats(def);
+    const statsEl = h('div', { class: 'stat-grid', id: 'hangar-stats' });
+    const descEls = {};
+    const fmt = {
+      twr: (v) => (v == null ? '—' : v.toFixed(2)),
+      mass: (v) => (v == null ? '—' : v >= 100 ? `${Math.round(v).toLocaleString()} kg` : `${v.toFixed(2)} kg`),
+      roll: (v) => (v == null ? '—' : `${Math.round((v * 180) / Math.PI)}°${def.model === 'fixedwing' ? '/s' : ''}`),
+      armor: (v) => `${Math.round(v * 100)}%`,
+    };
+    const diff = (a, b, better) => (a == null || b == null || Math.abs(a - b) < 1e-6 ? '' : (better ? b > a : b < a) ? ' ▲' : ' ▼');
+    const refresh = () => {
+      const s = modStats(applyMods(def, m));
+      statsEl.innerHTML = '';
+      const row = (k, a, b, mark) => statsEl.append(h('span', { class: 'k' }, k), h('span', {}, b, mark ? h('b', { class: mark.includes('▲') ? 'up' : 'down' }, mark) : null, a !== b ? h('span', { class: 'muted' }, `（標準 ${a}）`) : null));
+      row('推力重量比', fmt.twr(base.twr), fmt.twr(s.twr), diff(base.twr, s.twr, true));
+      row('質量', fmt.mass(base.mass), fmt.mass(s.mass), diff(base.mass, s.mass, false));
+      row(def.model === 'fixedwing' ? 'ロール' : '傾き', fmt.roll(base.roll), fmt.roll(s.roll), diff(base.roll, s.roll, true));
+      row('受けるダメージ', fmt.armor(base.armor), fmt.armor(s.armor), diff(base.armor, s.armor, false));
+      row('武装', base.weapon, s.weapon, '');
+      for (const k of Object.keys(descEls)) descEls[k].textContent = MOD_SLOTS[k].options[m[k]].desc;
+    };
+    const rows = [];
+    for (const k of ['arms', 'engine', 'body']) {
+      const opts = MOD_SLOTS[k].options;
+      const ctl = segmented(opts, Object.keys(opts), m[k], (id) => { m[k] = id; refresh(); onChange({ ...m }); }, 'name', `mod-${k}-`);
+      ctl.setVisible(choices[k]);
+      descEls[k] = h('div', { class: 'muted mod-desc' });
+      rows.push(h('div', { class: 'k' }, MOD_SLOTS[k].name), h('div', { class: 'col', style: { gap: '2px', alignItems: 'flex-start' } }, ctl, descEls[k]));
+    }
+    el.append(
+      h('div', { class: 'screen-head' },
+        tapButton('← 戻る', onClose, 'btn small', { id: 'btn-hangar-back' }),
+        h('h2', {}, `改造: ${def.short}`),
+        tapButton('標準に戻す', () => { onChange({ ...DEFAULT_MODS }); this.showHangar(def, {}, onChange, onClose); }, 'btn small', { id: 'btn-hangar-reset' })),
+      h('div', { class: 'guide-body' },
+        h('div', { class: 'guide-content row', style: { alignItems: 'flex-start', gap: '14px', flexWrap: 'nowrap', justifyContent: 'flex-start' } },
+          h('div', { class: 'opts hangar-opts' }, ...rows),
+          h('div', { class: 'col hangar-stats-col', style: { gap: '6px', alignItems: 'stretch' } }, h('h4', { style: { margin: '0' } }, '性能'), statsEl,
+            h('div', { class: 'hint', style: { textAlign: 'left' } }, '改造はこの機体の次の飛行から反映（2 人プレイ・今日のチャレンジ・練習では標準）。武器は射撃モードと武装フリーで使える。')))),
+    );
+    refresh();
+    this.show('hangar');
   }
 
   // ---------- 記録 ----------

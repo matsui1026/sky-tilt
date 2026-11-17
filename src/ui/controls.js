@@ -46,7 +46,9 @@ export class FlightControls {
     this.missileBtn = h('button', { class: 'hbtn ctl', id: 'btn-missile', type: 'button', 'data-button': 'missile' }, 'ミサイル');
     bindButton(this.fireBtn, { id: 'fire', type: 'hold' }, { hold: (id, on) => cb.onHold(id, on) });
     bindButton(this.missileBtn, { id: 'missile', type: 'once' }, { action: (id) => cb.onAction(id) });
-    this.weaponZone = h('div', { id: 'weapon-zone' }, this.missileBtn, this.fireBtn);
+    this.rocketBtn = h('button', { class: 'hbtn ctl', id: 'btn-rocket', type: 'button', 'data-button': 'rocket' }, 'ロケット');
+    bindButton(this.rocketBtn, { id: 'rocket', type: 'once' }, { action: (id) => cb.onAction(id) });
+    this.weaponZone = h('div', { id: 'weapon-zone' }, this.rocketBtn, this.missileBtn, this.fireBtn);
     this.el.append(
       h('div', { id: 'top-left' }, this.pause, this.recal),
       h('div', { id: 'top-right' }, this.warp, this.smokeBtn, this.apBtn, this.cam),
@@ -93,11 +95,14 @@ export class FlightControls {
     }
     const noThrottle = isCar || def.model === 'paraglider' || def.model === 'human' || !!(def.p.thrust && def.p.thrust.type === 'none');
     this.thrEl.style.display = noThrottle ? 'none' : '';
-    this.thrLabel.textContent = { heli: def.id === 'drone' ? '推力' : 'コレクティブ', jetsuit: '推力', balloon: 'バーナー', flycar: 'アクセル' }[def.model] || 'スロットル';
+    this.thrLabel.textContent = { heli: (def.base || def.id) === 'drone' ? '推力' : 'コレクティブ', jetsuit: '推力', balloon: 'バーナー', flycar: 'アクセル' }[def.model] || 'スロットル';
     const armed = combat && !!def.weapon;
     this.weaponZone.style.display = armed ? '' : 'none';
     this.weaponZone.classList.toggle('no-throttle', noThrottle);
     this.missileBtn.style.display = armed && def.weapon.missiles ? '' : 'none';
+    // ミサイルとロケットの両方を積んでいるときは 1 つのボタン（ロック中はミサイル、それ以外はロケット）。縦に 3 つ積むと小さい画面でレーダーに届くため
+    this.dualSecondary = !!(armed && def.weapon.rockets && def.weapon.missiles);
+    this.rocketBtn.style.display = armed && def.weapon.rockets && !this.dualSecondary ? '' : 'none';
     this.fireBtn.textContent = armed ? def.weapon.name : '射撃';
   }
 
@@ -149,8 +154,11 @@ export class FlightControls {
     if (st.combat) {
       const c = st.combat;
       if (c.armed) this.fireBtn.innerHTML = `${c.weaponName}<span class="sub">残 ${c.ammo}</span>`;
-      this.missileBtn.innerHTML = `ミサイル<span class="sub">${c.lock.locked ? 'ロック!' : '残 ' + c.missiles}</span>`;
+      this.missileBtn.innerHTML = this.dualSecondary && !(c.lock.locked && c.missiles > 0)
+        ? `ロケット<span class="sub">残 ${c.rockets}・M${c.missiles}</span>`
+        : `ミサイル<span class="sub">${c.lock.locked ? 'ロック!' : '残 ' + c.missiles}</span>`;
       this.missileBtn.classList.toggle('on', !!c.lock.locked);
+      if (c.hasRockets) this.rocketBtn.innerHTML = `ロケット<span class="sub">残 ${c.rockets}</span>`;
     }
   }
 }

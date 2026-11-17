@@ -259,7 +259,7 @@ export class FlightRenderer {
     const att = state.attitude;
     const D2R = Math.PI / 180;
     const flightPath = Math.atan2(state.vs, Math.max(state.groundSpeed, 0.1));
-    const shakeBase = { prop: 0.0012, airliner: 0.0006, fighter: 0.0014, heli: 0.0022, jetsuit: 0.002, drone: 0.0008, flycar: 0.0012 }[this.def.id] || (this.def.model === 'car' ? 0.0006 : 0);
+    const shakeBase = { prop: 0.0012, airliner: 0.0006, fighter: 0.0014, heli: 0.0022, jetsuit: 0.002, drone: 0.0008, flycar: 0.0012 }[this.def.base || this.def.id] || (this.def.model === 'car' ? 0.0006 : 0);
     const turb = this.world.turbulence * 0.0012 * clamp(state.speed / 60, 0, 1);
     const rough = state.car && ['dirt', 'sand', 'rock', 'grass', 'park', 'snow'].includes(state.car.surface) ? 0.0035 : 0;
     const shake = state.onGround ? shakeBase * 0.5 + clamp(state.groundSpeed / 60, 0, 1) * (0.002 + rough) : shakeBase * (state.throttle ?? 0) + turb + (state.ab ? 0.0015 : 0);
@@ -387,5 +387,5 @@ export class FlightRenderer {
 const _tmpV = new THREE.Vector3();
 
 function sizeOf(def) {
-  return { prop: 11, airliner: 36, fighter: 12, sailplane: 17, heli: 10, drone: 0.6, flycar: 5.5, balloon: 14, paraglider: 4, jetsuit: 2, wingsuit: 3, skydive: 2.5 }[def.id] || 5;
+  return { prop: 11, airliner: 36, fighter: 12, sailplane: 17, heli: 10, drone: 0.6, flycar: 5.5, balloon: 14, paraglider: 4, jetsuit: 2, wingsuit: 3, skydive: 2.5 }[def.base || def.id] * (def.modelScale || 1) || 5;
 }

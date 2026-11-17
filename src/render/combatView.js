@@ -72,7 +72,7 @@ export function createCombatView(combat) {
   particles.frustumCulled = false;
   group.add(particles);
   const parts = []; // { p, v, life, max, c: [r,g,b], size }
-  const missileMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.15, 0.15, 2.4, 6).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xeeeeee }), 8);
+  const missileMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.15, 0.15, 2.4, 6).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xeeeeee }), 32);
   missileMesh.frustumCulled = false;
   group.add(missileMesh);
 
@@ -91,6 +91,7 @@ export function createCombatView(combat) {
     event(ev) {
       if (ev.type === 'pop') burst(ev.pos, 'pop');
       else if (ev.type === 'kill') burst(ev.pos, 'big');
+      else if (ev.type === 'impact' && ev.big) burst(ev.pos, 'big');
       else if (ev.type === 'hit' || ev.type === 'impact') burst(ev.pos, 'small');
     },
     update(dt, t) {
@@ -145,10 +146,10 @@ export function createCombatView(combat) {
       // ミサイル
       let mi = 0;
       for (const m of combat.missiles) {
-        if (mi >= 8) break;
+        if (mi >= 32) break;
         const dir = new THREE.Vector3(m.vel.x, m.vel.y, m.vel.z).normalize();
         const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), dir);
-        m4.compose(p.set(m.pos.x, m.pos.y, m.pos.z), q, s.set(1, 1, 1));
+        m4.compose(p.set(m.pos.x, m.pos.y, m.pos.z), q, m.rocket ? s.set(0.7, 0.7, 0.6) : s.set(1, 1, 1));
         missileMesh.setMatrixAt(mi++, m4);
         if (parts.length < MAX_PARTICLES) parts.push({ p: new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z), v: new THREE.Vector3(0, 1, 0), life: 0, max: 1.4, c: [0.8, 0.8, 0.8] });
       }

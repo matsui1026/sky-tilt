@@ -23,7 +23,8 @@ export async function state(page) {
 export const SHOT_DIR = path.resolve('reports/screenshots');
 export async function shot(page, name) {
   fs.mkdirSync(SHOT_DIR, { recursive: true });
-  await page.screenshot({ path: path.join(SHOT_DIR, `${name}.png`) });
+  // ソフトウェア描画（swiftshader・DPR 3）は重い端末で 1 枚 1 分近くかかることがある
+  await page.screenshot({ path: path.join(SHOT_DIR, `${name}.png`), timeout: 150_000 });
 }
 
 /**

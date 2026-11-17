@@ -5,7 +5,7 @@
 // 車: W/S アクセル・ブレーキ  A/D ハンドル  Space サイド  N ニトロ  V 復帰
 import { approach } from '../sim/math.js';
 
-const ACTION_KEYS = { KeyF: 'flaps', KeyG: 'gear', KeyX: 'spoiler', KeyB: 'ab', Space: 'deploy', KeyT: 'carMode', KeyM: 'missile', KeyV: 'reset', KeyL: 'autopilot', KeyO: 'smoke' };
+const ACTION_KEYS = { KeyF: 'flaps', KeyG: 'gear', KeyX: 'spoiler', KeyB: 'ab', Space: 'deploy', KeyT: 'carMode', KeyM: 'missile', KeyV: 'reset', KeyL: 'autopilot', KeyO: 'smoke', KeyU: 'rocket' };
 const UI_KEYS = { KeyC: 'camera', KeyR: 'recalibrate', Escape: 'pause', KeyP: 'pause', KeyY: 'warp' };
 
 export class KeyboardInput {
